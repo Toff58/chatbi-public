@@ -1,0 +1,59 @@
+# Agent 架构评审
+
+评审日期：2026-05-19
+
+参考资料：
+- OpenAI Agents SDK：<https://developers.openai.com/api/docs/guides/agents>
+- OpenAI Agents SDK Guardrails：<https://openai.github.io/openai-agents-python/guardrails/>
+- OpenAI Agents SDK Tracing：<https://github.com/openai/openai-agents-python/blob/main/docs/tracing.md>
+- LangGraph Overview：<https://docs.langchain.com/oss/python/langgraph/overview>
+- Model Context Protocol Resources：<https://modelcontextprotocol.io/docs/concepts/resources>
+- Model Context Protocol Prompts：<https://modelcontextprotocol.io/docs/concepts/prompts>
+
+## 结论
+
+当前产品采用“单 Agent + 单 SQL 工具 + 本地 RAG 规则 + 工具层强校验”的架构，和成熟 Agent 的基本规则是匹配的：模型负责理解和生成候选 SQL，真实数据访问被收口到工具，工具再做安全、枚举、人数口径和结果保护。
+
+对于当前 ChatBI 的产品阶段，不建议马上拆成多 Agent。问数链路是窄任务，拆成 Planner、SQL Writer、Reviewer、Reporter 会增加成本和失败点。更合适的下一步是继续增强单 Agent 的 guardrail、observability、评测集和前端澄清能力。
+
+## 已符合成熟 Agent 规则的部分
+
+| 规则 | 当前实现 | 评价 |
+| --- | --- | --- |
+| 工具边界清晰 | `query_app_data` 是唯一数据查询工具 | 符合。模型不能直接访问数据库。 |
+| 工具前后校验 | SQL 类型、禁用关键字、真实表引用、枚举值、人数上限、中间列暴露都在工具层校验 | 符合。比单纯 prompt 可靠。 |
+| 上下文注入 | `graph/rag.py`、`graph/sql_examples.py`、`graph/business_terms.py` 提供规则、样例和业务映射 | 符合。适合本地、低复杂度 RAG。 |
+| 可观测性 | `query_debug.jsonl` 和测试 CSV 记录工具调用、RAG、耗时、指标 | 基本符合。本次新增模型调用和 SQL 工具分段耗时。 |
+| 安全拒绝 | 危险 SQL、未知字段、非法枚举都有保护 | 基本符合。本次修复了真实表引用校验和未知字段前置阻断。 |
+| 评测闭环 | `tests/test_cases.py` 有 12 条高风险回归样例 | 基本符合。建议继续扩展到 50+ 产品级样例。 |
+
+## 与成熟 Agent 的差距
+
+| 差距 | 影响 | 建议 |
+| --- | --- | --- |
+| 没有持久化线程状态 | 刷新页面后会话历史只存在 Streamlit session 内 | 如要支持长期问数，可引入持久化 conversation/thread 表。 |
+| 没有人类确认节点 | 高风险查询只能靠拒绝，不能让用户确认口径 | 对“宏观人数估算”“非法枚举”“大范围词”增加澄清/确认交互。 |
+| 没有结构化 SQL 输出协议 | 仍依赖模型 tool call 参数里的 SQL 字符串 | 可要求模型输出 `{sql, assumptions, chart_intent}`，工具只接收 `sql`。 |
+| 没有专门的 chart planner | 前端只根据第一数值列画柱状图 | 增加图表意图字段或本地 chart selector。 |
+| 没有生产级 tracing 后端 | 目前是本地 JSONL/CSV | 可接 LangSmith 或自建 trace 表，按 trace_id 串起模型、工具、前端。 |
+| 没有缓存 | 相同问题重复调用模型 | 可缓存 schema profile、RAG 结果和高频问题 SQL。 |
+| SQL 校验不是 AST 级 | 目前是正则和 SQLite 执行前校验 | 可引入 SQL parser 或 SQLite authorizer 做更强安全边界。 |
+
+## 架构判断
+
+当前架构适合继续走“生产化单 Agent”路线：
+- Agent 不需要更复杂，但工具层要更硬。
+- RAG 不需要向量库起步，但规则、样例和字段枚举要持续产品化维护。
+- 前端不应该暴露 SQL 和推理过程，但需要给用户更自然的上下文、历史和结果切换。
+- 测试应从“能跑通”升级为“每条业务口径可回归、可量化、可复盘”。
+
+## 下一步优先级
+
+| 优先级 | 项目 | 原因 |
+| --- | --- | --- |
+| P0 | 扩展评测集到 50-100 条并按风险分层 | 当前 12 条能防核心回归，但覆盖还偏薄。 |
+| P0 | 增加澄清机制 | 宽泛品类、非法枚举、宏观人数口径需要产品可解释。 |
+| P1 | 引入结构化输出和 chart intent | 降低前端猜图表类型的随机性。 |
+| P1 | 做 trace_id 串联日志 | 方便从用户问题追到模型调用、SQL、工具和前端结果。 |
+| P2 | 引入持久化会话和权限 | 面向真实客户时需要多用户隔离和历史追溯。 |
+

@@ -1,0 +1,32 @@
+# Python virtual environment
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment variables
+.env
+.streamlit/secrets.toml
+
+# VS Code
+.vscode/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+*.log
+logs/
+query_log.csv
+query_debug.jsonl
+
+# Local databases generated from CSV
+# Keep app_user_distribution.db tracked only if you want faster demo startup.
+# app_user_distribution.db
+
+# OS
+.DS_Store
+Thumbs.db

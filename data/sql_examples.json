@@ -1,0 +1,74 @@
+[
+  {
+    "id": "example_overall_app_top",
+    "question": "用户数最多的前 10 个 App 是哪些？",
+    "table": "{table_name}",
+    "keywords": ["用户数", "最多", "排行", "top", "前", "app", "整体规模"],
+    "sql": "SELECT app_name, SUM(ppl_cnt) AS user_count\nFROM {table_name}\nGROUP BY app_name\nORDER BY user_count DESC\nLIMIT 10;",
+    "note": "整体 App 排行按 app_name 汇总 ppl_cnt，默认取前 10。",
+    "include_in_prompt": true
+  },
+  {
+    "id": "example_profile_app_top",
+    "question": "年轻女性在娱乐休闲里用得最多的是哪个 App？",
+    "table": "{table_name}",
+    "keywords": ["年轻", "女性", "娱乐休闲", "画像", "哪个app", "用得最多", "app"],
+    "sql": "SELECT app_name, SUM(ppl_cnt) AS user_count\nFROM {table_name}\nWHERE category IN ('娱乐休闲')\n  AND gender = '女'\n  AND age IN ('小于20岁', '20-24岁', '25-29岁')\nGROUP BY app_name\nORDER BY user_count DESC\nLIMIT 1;",
+    "note": "画像筛选类问题先过滤人群，再按 app_name 汇总排行。",
+    "include_in_prompt": true
+  },
+  {
+    "id": "example_city_category_app_top",
+    "question": "一线城市里网络购物类 App 用户数最多的前 5 个是哪些？",
+    "table": "{table_name}",
+    "keywords": ["一线城市", "网络购物", "用户数", "最多", "前", "app", "画像"],
+    "sql": "SELECT app_name, SUM(ppl_cnt) AS user_count\nFROM {table_name}\nWHERE city_tier = '一线城市'\n  AND category = '网络购物'\nGROUP BY app_name\nORDER BY user_count DESC\nLIMIT 5;",
+    "note": "组合筛选后仍然按 App 维度汇总，适合 Top N 查询。",
+    "include_in_prompt": false
+  },
+  {
+    "id": "example_lower_tier_high_income_male",
+    "question": "下沉城市里高收入男性最常用的前 10 个 App 是哪些？",
+    "table": "{table_name}",
+    "keywords": ["下沉", "低线", "高收入", "男性", "最常用", "前", "app"],
+    "sql": "SELECT app_name, SUM(ppl_cnt) AS user_count\nFROM {table_name}\nWHERE city_tier IN ('三线城市', '四线城市', '五线城市')\n  AND income = '20K+'\n  AND gender = '男'\nGROUP BY app_name\nORDER BY user_count DESC\nLIMIT 10;",
+    "note": "下沉城市和高收入是业务默认口径，进入 prompt 前会被规则说明约束。",
+    "include_in_prompt": false
+  },
+  {
+    "id": "example_macro_province_population",
+    "question": "广东省总人数是多少？",
+    "table": "{table_name}",
+    "keywords": ["广东省", "省份", "总人数", "宏观", "人口", "base", "比例", "province"],
+    "sql": "SELECT\n  '广东省' AS province,\n  ROUND(\n    {population_base}.0\n    * SUM(CASE WHEN province = '广东省' THEN ppl_cnt ELSE 0 END)\n    / NULLIF(SUM(CASE WHEN province IS NOT NULL AND TRIM(province) != '' AND province != 'NA' THEN ppl_cnt ELSE 0 END), 0)\n  ) AS estimated_user_count\nFROM {table_name};",
+    "note": "宏观人群人数不直接 SUM(ppl_cnt)，先按有效样本占比估算。",
+    "include_in_prompt": true
+  },
+  {
+    "id": "example_rebased_gender_share",
+    "question": "女性用户占比是多少？",
+    "table": "{table_name}",
+    "keywords": ["女性", "占比", "比例", "rebase", "NA", "空白", "gender"],
+    "sql": "SELECT\n  ROUND(\n    100.0 * SUM(CASE WHEN gender = '女' THEN ppl_cnt ELSE 0 END)\n    / NULLIF(SUM(CASE WHEN gender IN ('男', '女') THEN ppl_cnt ELSE 0 END), 0),\n    2\n  ) AS female_percent\nFROM {table_name}\nWHERE gender IN ('男', '女');",
+    "note": "性别占比排除 NA/空白，只在有效性别样本内 rebase。",
+    "include_in_prompt": true
+  },
+  {
+    "id": "example_invalid_enum_empty_result",
+    "question": "火星省用户最多的 App 是哪个？",
+    "table": "{table_name}",
+    "keywords": ["不存在", "无匹配", "火星省", "非法枚举", "省份", "WHERE 1=0"],
+    "sql": "SELECT app_name, SUM(ppl_cnt) AS user_count\nFROM {table_name}\nWHERE 1 = 0\nGROUP BY app_name\nORDER BY user_count DESC\nLIMIT 1;",
+    "note": "不存在的枚举值不写进 WHERE，使用安全空结果查询。",
+    "include_in_prompt": true
+  },
+  {
+    "id": "example_rebased_gender_distribution",
+    "question": "社交沟通类 App 按性别分别有多少用户？",
+    "table": "{table_name}",
+    "keywords": ["社交沟通", "性别", "分别", "多少用户", "宏观", "rebase", "gender"],
+    "sql": "SELECT\n  gender,\n  ROUND(\n    {population_base}.0 * SUM(ppl_cnt)\n    / NULLIF((\n      SELECT SUM(ppl_cnt)\n      FROM {table_name}\n      WHERE gender IN ('男', '女')\n    ), 0)\n  ) AS estimated_user_count\nFROM {table_name}\nWHERE category = '社交沟通'\n  AND gender IN ('男', '女')\nGROUP BY gender\nORDER BY estimated_user_count DESC;",
+    "note": "按性别宏观估算时只暴露最终指标，不输出中间分子分母。",
+    "include_in_prompt": false
+  }
+]
