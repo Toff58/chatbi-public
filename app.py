@@ -197,10 +197,11 @@ def save_supabase_log(question: str, state: dict[str, Any]) -> None:
     }
     headers = {
         "apikey": service_role_key,
-        "Authorization": f"Bearer {service_role_key}",
         "Content-Type": "application/json",
         "Prefer": "return=minimal",
     }
+    if service_role_key.startswith("eyJ"):
+        headers["Authorization"] = f"Bearer {service_role_key}"
 
     try:
         response = requests.post(
@@ -210,7 +211,8 @@ def save_supabase_log(question: str, state: dict[str, Any]) -> None:
             timeout=SUPABASE_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
-    except requests.RequestException:
+    except requests.RequestException as exc:
+        print(f"Supabase log sync failed: {exc}", flush=True)
         return
 
 
