@@ -5,6 +5,7 @@
 - 数据窗口：公开演示版仅包含 `2025-07` 的 App 人群数据。
 - 多人访问：公开演示版默认关闭全局 Memory，避免不同访问者的问题互相影响。当前页面内的聊天历史仍由 Streamlit 会话保留。
 - 运行日志：仓库不包含历史日志；用户问数后会在服务端追加写入 `logs/query_log.csv`，并生成 `logs/query_debug.jsonl` 供调试复盘。
+- 云端日志：配置 Supabase 后，用户问数日志会同步写入 `chatbi_query_logs` 表；本地 CSV/JSONL 日志仍会保留。
 - 密钥管理：不要提交 `.streamlit/secrets.toml`。部署时通过环境变量或 Streamlit Secrets 配置 `DEEPSEEK_API_KEY`。
 
 ## 项目定位
@@ -176,6 +177,18 @@ LIMIT 10;
 - 最终回答
 
 调试日志：`logs/query_debug.jsonl`
+
+可选云端日志：Supabase 表 `chatbi_query_logs`
+
+Streamlit Secrets 示例：
+
+```toml
+DEEPSEEK_API_KEY = "your-deepseek-api-key"
+SUPABASE_URL = "https://your-project-ref.supabase.co"
+SUPABASE_SERVICE_ROLE_KEY = "your-service-role-key"
+```
+
+Supabase 表可以开启 RLS。应用使用服务端 `service_role` key 写入日志，该 key 只保存在 Streamlit Secrets 中，不会暴露给浏览器用户，也不要提交到 GitHub。
 
 公开演示版默认关闭全局 Memory，不生成 `logs/lightweight_memory.json`，避免多人访问时互相影响上下文。如需在开发环境恢复全局 Memory，可设置环境变量：
 

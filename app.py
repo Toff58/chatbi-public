@@ -5,6 +5,7 @@ import json
 import math
 import os
 import sqlite3
+import uuid
 import zipfile
 from datetime import datetime
 from numbers import Number
@@ -13,6 +14,7 @@ from typing import Any
 
 import altair as alt
 import pandas as pd
+import requests
 import streamlit as st
 
 from config import DATA_CSV_PATH, DB_PATH, IMPORT_METADATA_TABLE, TABLE_NAME
@@ -23,6 +25,10 @@ from graph.workflow import build_graph
 LOG_DIR = Path("logs")
 QUERY_LOG_FILE = LOG_DIR / "query_log.csv"
 DEBUG_LOG_FILE = LOG_DIR / "query_debug.jsonl"
+SUPABASE_LOG_TABLE = "chatbi_query_logs"
+SUPABASE_TIMEOUT_SECONDS = 5
+APP_VERSION = "public-demo"
+DATA_WINDOW = "2025-07"
 HIDDEN_DISPLAY_COLUMN_FRAGMENTS = {
     "numerator",
     "denominator",
@@ -107,6 +113,7 @@ def _csv_row_count(csv_path: str) -> int:
 def save_logs(question: str, state: dict[str, Any]) -> None:
     save_query_log(question, state)
     save_debug_log(question, state)
+    save_supabase_log(question, state)
 
 
 def save_query_log(question: str, state: dict[str, Any]) -> None:
@@ -120,6 +127,7 @@ def save_query_log(question: str, state: dict[str, Any]) -> None:
         writer.writerow(
             {
                 "时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "session_id": state.get("session_id") or "",
                 "用户问题": question,
                 "生成SQL": state.get("sql") or "",
                 "是否校验通过": state.get("sql_valid", ""),
@@ -145,6 +153,7 @@ def save_debug_log(question: str, state: dict[str, Any]) -> None:
     DEBUG_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "time": datetime.now().isoformat(timespec="seconds"),
+        "session_id": state.get("session_id"),
         "question": question,
         "sql": state.get("sql"),
         "answer": state.get("answer"),
@@ -159,9 +168,93 @@ def save_debug_log(question: str, state: dict[str, Any]) -> None:
         file.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
+def save_supabase_log(question: str, state: dict[str, Any]) -> None:
+    supabase_url = _get_config_value("SUPABASE_URL").rstrip("/")
+    service_role_key = _get_config_value("SUPABASE_SERVICE_ROLE_KEY")
+    if not supabase_url or not service_role_key:
+        return
+
+    metrics = state.get("metrics") or {}
+    payload = {
+        "session_id": state.get("session_id") or "",
+        "question": question,
+        "generated_sql": state.get("sql") or "",
+        "sql_valid": _optional_bool(state.get("sql_valid")),
+        "result_summary": summarize_result_for_log(state),
+        "answer": state.get("answer") or "",
+        "error": state.get("error") or "",
+        "accuracy": _optional_number(metrics.get("accuracy")),
+        "precision_score": _optional_number(metrics.get("precision")),
+        "recall_score": _optional_number(metrics.get("recall")),
+        "execution_success": _optional_bool(metrics.get("execution_success")),
+        "tool_called": _optional_bool(metrics.get("tool_called")),
+        "answer_nonempty": _optional_bool(metrics.get("answer_nonempty")),
+        "result_count": _optional_int(metrics.get("result_count")),
+        "rag_context_count": _optional_int(metrics.get("rag_context_count")),
+        "latency_ms": _optional_int(metrics.get("latency_ms")),
+        "app_version": APP_VERSION,
+        "data_window": DATA_WINDOW,
+    }
+    headers = {
+        "apikey": service_role_key,
+        "Authorization": f"Bearer {service_role_key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+
+    try:
+        response = requests.post(
+            f"{supabase_url}/rest/v1/{SUPABASE_LOG_TABLE}",
+            headers=headers,
+            json=payload,
+            timeout=SUPABASE_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        return
+
+
+def _get_config_value(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if value:
+        return value
+    try:
+        return str(st.secrets.get(name, "")).strip()
+    except Exception:
+        return ""
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value in {"True", "true", "1", 1}:
+        return True
+    if value in {"False", "false", "0", 0}:
+        return False
+    return None
+
+
+def _optional_number(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(number) or math.isinf(number):
+        return None
+    return number
+
+
+def _optional_int(value: Any) -> int | None:
+    number = _optional_number(value)
+    if number is None:
+        return None
+    return int(number)
+
+
 def _log_fieldnames() -> list[str]:
     return [
         "时间",
+        "session_id",
         "用户问题",
         "生成SQL",
         "是否校验通过",
@@ -740,10 +833,11 @@ def _coerce_float(value: Any) -> float:
     return number
 
 
-def ask(question: str) -> dict[str, Any]:
+def ask(question: str, session_id: str | None = None) -> dict[str, Any]:
     app = build_graph()
     initial_state = {
         "question": question,
+        "session_id": session_id,
         "sql": None,
         "sql_valid": False,
         "summary": None,
@@ -829,7 +923,7 @@ def run_question(question: str) -> None:
 
     with st.chat_message("assistant"):
         status = st.status("正在理解问题并检索业务口径...", expanded=False)
-        state = ask(cleaned_question)
+        state = ask(cleaned_question, st.session_state.session_id)
         status.update(label="分析完成", state="complete")
         render_answer_state(state, key_prefix=f"live_{len(st.session_state.messages)}")
     st.session_state.messages.append({"role": "assistant", "state": state})
@@ -849,6 +943,8 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "pending_question" not in st.session_state:
     st.session_state.pending_question = None
+if "session_id" not in st.session_state:
+    st.session_state.session_id = uuid.uuid4().hex
 
 with st.sidebar:
     st.info("公开演示版仅包含 2025-07 数据。")
