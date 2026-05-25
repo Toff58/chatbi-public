@@ -53,6 +53,101 @@ TREND_KEYWORDS = {
     "最近几个月",
 }
 RELATIVE_MONTH_KEYWORDS = {"本月", "这个月", "当月", "上月", "下月", "今年", "去年"}
+APP_ALIAS_TERMS = {
+    "微信",
+    "支付宝",
+    "抖音",
+    "快手",
+    "淘宝",
+    "天猫",
+    "京东",
+    "拼多多",
+    "小红书",
+    "微博",
+    "qq",
+    "百度",
+    "高德",
+    "美团",
+    "饿了么",
+    "b站",
+    "哔哩哔哩",
+}
+CROSS_APP_RELATION_KEYWORDS = {
+    "同时使用",
+    "同时用",
+    "共同使用",
+    "共同用户",
+    "共用用户",
+    "都使用",
+    "都用",
+    "也使用",
+    "也用",
+    "还使用",
+    "还用",
+    "重合",
+    "重叠",
+    "交叉",
+    "交集",
+    "双装",
+    "多装",
+    "共现",
+}
+USER_LEVEL_SET_KEYWORDS = {
+    "去重",
+    "不重复",
+    "覆盖用户",
+    "覆盖人数",
+    "用户覆盖",
+    "独立用户",
+    "唯一用户",
+    "至少使用",
+    "至少用",
+    "任一app",
+    "任一应用",
+    "任意app",
+    "任意应用",
+    "人均使用",
+    "人均安装",
+    "平均使用几个",
+    "平均安装几个",
+}
+UNAVAILABLE_BEHAVIOR_KEYWORDS = {
+    "使用时长",
+    "在线时长",
+    "停留时长",
+    "使用频次",
+    "使用频率",
+    "打开次数",
+    "启动次数",
+    "访问次数",
+    "活跃天数",
+    "留存",
+    "新增",
+    "卸载",
+    "下载量",
+    "安装量",
+    "订单",
+    "交易金额",
+    "支付金额",
+    "gmv",
+    "转化",
+    "漏斗",
+    "点击",
+    "曝光",
+}
+UNAVAILABLE_RELATIONSHIP_KEYWORDS = {"相关性", "相关系数", "关联度", "因果", "影响", "导致", "驱动"}
+ANSWER_PROCESS_LINE_MARKERS = {
+    "让我重新理解",
+    "重新理解",
+    "更合理的理解",
+    "这需要先",
+    "需要先筛选",
+    "需要先找到",
+    "所以我们需要",
+    "从结果看",
+    "分析过程",
+    "推导过程",
+}
 
 PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
 SYSTEM_PROMPT = (PROMPT_DIR / "answer_generation_prompt.md").read_text(encoding="utf-8").strip().format(
@@ -254,6 +349,22 @@ class ChatBIAgentApp:
                 data_issue,
             )
 
+        data_scope_issue = self._detect_data_scope_issue(question)
+        if data_scope_issue:
+            reset_model_call_timings()
+            return self._informational_state(
+                state,
+                rag_items,
+                matched_scopes,
+                sql_examples,
+                context_usage,
+                started_at,
+                retrieval_ms,
+                data_scope_issue["answer"],
+                data_scope_issue["clarifications"],
+                data_scope_issue,
+            )
+
         unknown_fields = self._detect_unknown_field_tokens(question)
         if unknown_fields:
             reset_model_call_timings()
@@ -429,6 +540,7 @@ class ChatBIAgentApp:
                 "sql_examples": sql_examples,
                 "context_usage": context_usage,
                 "data_issue": data_issue,
+                "guardrail_issue": data_issue,
                 "data_window": self._available_months(),
             },
         }
@@ -591,6 +703,145 @@ RAG 检索到的业务规则：
             }
 
         return None
+
+    def _detect_data_scope_issue(self, question: str) -> dict[str, Any] | None:
+        compact = _compact_question(question)
+        app_mentions = self._mentioned_app_terms(question)
+
+        if self._asks_for_cross_app_overlap(question, compact, app_mentions):
+            return self._unsupported_scope_issue(
+                "unsupported_cross_app_overlap",
+                "这个问题需要知道同一个用户是否同时使用多个 App，但当前表只有 App × 画像切片的聚合人数，没有用户级 ID 或跨 App 关联字段，因此不能计算交叉重合、共同用户或某 App 用户里的其他 App 分布。",
+                [
+                    "可以改问“支付宝和抖音短视频分别有多少用户”",
+                    "也可以改问“某类画像人群中哪些 App 用户数最多”",
+                ],
+            )
+
+        if self._asks_for_user_level_set_metric(compact, app_mentions):
+            return self._unsupported_scope_issue(
+                "unsupported_user_level_set_metric",
+                "这个问题需要用户级去重或集合关系，但当前数据只有聚合切片人数，不能判断任一/至少使用、去重覆盖、人均使用几个 App、双装或多装。",
+                [
+                    "可以改问“各 App 的用户规模排行”",
+                    "也可以按画像条件查询 App Top 或分布",
+                ],
+            )
+
+        if self._asks_for_unavailable_behavior_metric(compact):
+            return self._unsupported_scope_issue(
+                "unsupported_behavior_metric",
+                "这个问题需要行为日志、订单或设备级明细，但当前表没有使用时长、打开次数、频次、留存、新增、卸载、下载量、订单或交易金额等字段。",
+                [
+                    "可以改问“某个 App 的用户数”",
+                    "也可以改问“某个 App 在年龄、性别、城市等级等画像上的分布”",
+                ],
+            )
+
+        if self._asks_for_unavailable_relationship_analysis(compact, app_mentions):
+            return self._unsupported_scope_issue(
+                "unsupported_relationship_analysis",
+                "这个问题需要用户级关系、实验或时间链路数据。当前聚合切片表只能做人数、占比、画像分布和 App 排行，不能证明因果、影响、转化或相关性。",
+                [
+                    "可以改问“不同画像下 App 用户数如何分布”",
+                    "也可以改问“某类人群里 App 用户数排名”",
+                ],
+            )
+
+        return None
+
+    def _mentioned_app_terms(self, question: str) -> set[str]:
+        compact = _compact_question(question)
+        enum_values = self.schema_profile.get("enum_values") or {}
+        app_values = enum_values.get("app_name", [])
+        mentions: set[str] = set()
+        for app_name in app_values:
+            normalized = str(app_name).strip().lower()
+            if normalized and normalized in compact:
+                mentions.add(str(app_name))
+        for alias in APP_ALIAS_TERMS:
+            if alias.lower() in compact:
+                mentions.add(alias)
+        return mentions
+
+    def _asks_for_cross_app_overlap(self, question: str, compact: str, app_mentions: set[str]) -> bool:
+        has_app_or_category_context = self._has_app_or_category_context(compact, app_mentions)
+        if has_app_or_category_context and _contains_any_compact(compact, CROSS_APP_RELATION_KEYWORDS):
+            return True
+
+        if len(app_mentions) >= 2 and re.search(
+            r"(使用|用|打开|安装|装).{0,30}(的人|用户|人群).{0,30}(使用|用|打开|安装|装)",
+            compact,
+        ):
+            return True
+
+        if app_mentions and re.search(
+            r"(使用|用|打开|安装|装)?[^，。？！?]*?(用户|的人|人群)(中|里|里面|当中)"
+            r"[^，。？！?]*(其他|其它|别的|还|也|同时|共同|哪个app|哪些app|哪款app|app最多|应用最多)",
+            compact,
+        ):
+            return True
+
+        if app_mentions and re.search(
+            r"(使用|用|打开|安装|装)[^，。？！?]*(的人|用户|人群)[^，。？！?]*"
+            r"(哪个app|哪些app|其他app|其它app|别的app|应用)",
+            compact,
+        ):
+            return True
+
+        return False
+
+    def _asks_for_user_level_set_metric(self, compact: str, app_mentions: set[str]) -> bool:
+        if self._has_app_or_category_context(compact, app_mentions) and _contains_any_compact(
+            compact,
+            USER_LEVEL_SET_KEYWORDS,
+        ):
+            return True
+
+        return bool(
+            re.search(r"(使用|用|安装|装).{0,8}(几个|多少个).{0,8}(app|应用)", compact)
+            or re.search(r"(几个|多少个).{0,8}(app|应用).{0,8}(用户|人数)", compact)
+        )
+
+    def _asks_for_unavailable_behavior_metric(self, compact: str) -> bool:
+        return _contains_any_compact(compact, UNAVAILABLE_BEHAVIOR_KEYWORDS)
+
+    def _asks_for_unavailable_relationship_analysis(self, compact: str, app_mentions: set[str]) -> bool:
+        if not _contains_any_compact(compact, UNAVAILABLE_RELATIONSHIP_KEYWORDS):
+            return False
+        return self._has_app_or_category_context(compact, app_mentions) or any(
+            term in compact for term in {"年龄", "收入", "性别", "城市", "省份", "画像", "人群"}
+        )
+
+    def _has_app_or_category_context(self, compact: str, app_mentions: set[str]) -> bool:
+        return bool(app_mentions) or any(
+            term in compact
+            for term in {
+                "app",
+                "应用",
+                "品类",
+                "类别",
+                "类目",
+                "社交",
+                "购物",
+                "娱乐",
+                "短视频",
+                "金融",
+            }
+        )
+
+    def _unsupported_scope_issue(
+        self,
+        issue_type: str,
+        reason: str,
+        suggestions: list[str],
+    ) -> dict[str, Any]:
+        suggestion_text = "；".join(suggestions)
+        return {
+            "type": issue_type,
+            "answer": f"当前数据不支持这个问题。{reason}可支持的问法包括：{suggestion_text}。",
+            "clarifications": [f"数据边界说明：{reason}"],
+        }
 
     def _available_months(self) -> list[str]:
         enum_values = self.schema_profile.get("enum_values") or {}
@@ -783,6 +1034,7 @@ RAG 检索到的业务规则：
 
     def _sanitize_customer_answer(self, answer: str) -> str:
         sanitized = answer.strip()
+        sanitized = _strip_reasoning_process_text(sanitized)
         sanitized = re.sub(r"（[^（）]*(?:base|后端|上限|校验|系统约束)[^（）]*）", "", sanitized, flags=re.IGNORECASE)
         sanitized = re.sub(r"\([^()]*(?:base|后端|上限|校验|系统约束)[^()]*\)", "", sanitized, flags=re.IGNORECASE)
         sanitized = re.sub(
@@ -830,6 +1082,35 @@ def _normalize_chinese_month_text(text: str) -> str:
     for chinese_month, month in month_map.items():
         normalized = normalized.replace(f"{chinese_month}月", f"{month}月")
     return normalized
+
+
+def _compact_question(text: str) -> str:
+    return re.sub(r"\s+", "", text.lower())
+
+
+def _contains_any_compact(text: str, keywords: set[str]) -> bool:
+    return any(keyword.lower().replace(" ", "") in text for keyword in keywords)
+
+
+def _strip_reasoning_process_text(text: str) -> str:
+    if not text:
+        return text
+
+    conclusion_matches = list(re.finditer(r"(?:^|\n)\s*(?:\*\*)?结论\s*[:：]", text))
+    if conclusion_matches and _contains_reasoning_process_text(text[: conclusion_matches[-1].start()]):
+        text = text[conclusion_matches[-1].start() :].strip()
+
+    lines = []
+    for line in text.splitlines():
+        if _contains_reasoning_process_text(line):
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def _contains_reasoning_process_text(text: str) -> bool:
+    compact = _compact_question(text)
+    return any(marker.lower().replace(" ", "") in compact for marker in ANSWER_PROCESS_LINE_MARKERS)
 
 
 def _contains_backend_only_text(text: str) -> bool:

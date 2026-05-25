@@ -61,6 +61,7 @@ def evaluate_case(test_case: dict[str, Any], state: dict[str, Any]) -> tuple[boo
     sql = state.get("sql") or ""
     sql_valid = bool(state.get("sql_valid"))
     error = state.get("error")
+    answer = state.get("answer") or ""
     rows = state.get("result") or []
     result_count = len(rows)
 
@@ -82,6 +83,10 @@ def evaluate_case(test_case: dict[str, Any], state: dict[str, Any]) -> tuple[boo
     for pattern in test_case.get("forbidden_sql_patterns", []):
         if sql and re.search(pattern, sql, flags=re.IGNORECASE):
             failures.append(f"forbidden SQL pattern matched: {pattern}")
+
+    for pattern in test_case.get("expected_answer_patterns", []):
+        if not re.search(pattern, answer, flags=re.IGNORECASE):
+            failures.append(f"missing answer pattern: {pattern}")
 
     if "exact_result_count" in test_case and result_count != test_case["exact_result_count"]:
         failures.append(
