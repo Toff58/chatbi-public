@@ -137,6 +137,13 @@ BUSINESS_KNOWLEDGE: list[dict[str, Any]] = [
         "sql_hint": "ORDER BY user_count DESC LIMIT 10",
     },
     {
+        "id": "dimension_enum_lookup",
+        "title": "字段取值枚举",
+        "content": "当用户问有哪些、包括哪些、可选值、取值、枚举、穷举或可问范围时，应返回目标维度的 DISTINCT 取值，不要改写成人数、排行或占比问题。",
+        "keywords": ["有哪些", "包括哪些", "可选值", "取值", "枚举", "穷举", "可问范围", "字段字典", "指标字典"],
+        "sql_hint": "SELECT DISTINCT 目标字段 FROM app_data WHERE 目标字段 IS NOT NULL AND TRIM(目标字段) != '' ORDER BY 目标字段",
+    },
+    {
         "id": "young_users",
         "title": "年轻用户口径",
         "content": "年轻用户通常可理解为 age in ('小于20岁', '20-24岁', '25-29岁')。",

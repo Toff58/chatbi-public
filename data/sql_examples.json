@@ -54,6 +54,15 @@
     "include_in_prompt": true
   },
   {
+    "id": "example_enum_city_tier_values",
+    "question": "有哪些城市等级可以问？",
+    "table": "{table_name}",
+    "keywords": ["有哪些", "城市", "城市等级", "取值", "枚举", "可问范围"],
+    "sql": "SELECT DISTINCT city_tier AS city_tier\nFROM {table_name}\nWHERE city_tier IS NOT NULL\n  AND TRIM(city_tier) != ''\n  AND city_tier != 'NA'\nORDER BY city_tier;",
+    "note": "字段取值类问题只返回维度枚举，不改写成人数统计或排行。",
+    "include_in_prompt": false
+  },
+  {
     "id": "example_invalid_enum_empty_result",
     "question": "火星省用户最多的 App 是哪个？",
     "table": "{table_name}",

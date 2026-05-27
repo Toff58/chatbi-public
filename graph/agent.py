@@ -136,6 +136,66 @@ UNAVAILABLE_BEHAVIOR_KEYWORDS = {
     "曝光",
 }
 UNAVAILABLE_RELATIONSHIP_KEYWORDS = {"相关性", "相关系数", "关联度", "因果", "影响", "导致", "驱动"}
+ENUM_LOOKUP_PHRASES = {
+    "有哪些",
+    "有什么",
+    "有哪几种",
+    "有哪类",
+    "包括哪些",
+    "包含哪些",
+    "可选值",
+    "取值",
+    "枚举",
+    "穷举",
+    "列出",
+    "可问范围",
+    "能问哪些",
+    "可以问哪些",
+    "字段字典",
+    "指标字典",
+}
+ENUM_ANALYSIS_KEYWORDS = {
+    "用户数",
+    "人数",
+    "人口",
+    "占比",
+    "比例",
+    "排行",
+    "排名",
+    "最多",
+    "最高",
+    "最大",
+    "top",
+    "前",
+    "使用",
+    "常用",
+    "用得最多",
+    "多少",
+    "分布",
+    "规模",
+}
+ENUM_DISPLAY_LABELS = {
+    "app_name": "App",
+    "category": "品类",
+    "category_new": "细分品类",
+    "active_month": "月份",
+    "city_tier": "城市等级",
+    "income": "收入段",
+    "gender": "性别",
+    "province": "省份",
+    "age": "年龄段",
+}
+ENUM_FIELD_TERMS = [
+    ("category_new", {"细分品类", "新品类", "新分类", "新类目"}),
+    ("category", {"品类", "类别", "类目", "分类", "原始品类"}),
+    ("province", {"省份", "省", "地区", "地域"}),
+    ("city_tier", {"城市等级", "城市", "几线", "一线", "二线", "三线", "四线", "五线", "下沉", "低线"}),
+    ("income", {"收入", "收入段", "薪资", "工资", "高收入", "低收入"}),
+    ("gender", {"性别", "男女", "男性", "女性", "男", "女"}),
+    ("age", {"年龄", "年龄段", "岁"}),
+    ("active_month", {"月份", "时间", "月"}),
+    ("app_name", {"app", "应用", "软件"}),
+]
 ANSWER_PROCESS_LINE_MARKERS = {
     "让我重新理解",
     "重新理解",
@@ -363,6 +423,20 @@ class ChatBIAgentApp:
                 data_scope_issue["answer"],
                 data_scope_issue["clarifications"],
                 data_scope_issue,
+            )
+
+        enum_lookup = self._detect_enum_lookup(question)
+        if enum_lookup:
+            reset_model_call_timings()
+            return self._enum_lookup_state(
+                state,
+                rag_items,
+                matched_scopes,
+                sql_examples,
+                context_usage,
+                started_at,
+                retrieval_ms,
+                enum_lookup,
             )
 
         unknown_fields = self._detect_unknown_field_tokens(question)
@@ -606,6 +680,69 @@ class ChatBIAgentApp:
             },
         }
 
+    def _enum_lookup_state(
+        self,
+        state: ChatBIState,
+        rag_items: list[dict[str, Any]],
+        matched_scopes: list[dict[str, Any]],
+        sql_examples: list[dict[str, Any]],
+        context_usage: dict[str, Any],
+        started_at: float,
+        retrieval_ms: int,
+        enum_lookup: dict[str, Any],
+    ) -> ChatBIState:
+        total_ms = int((time.perf_counter() - started_at) * 1000)
+        sql = enum_lookup.get("sql")
+        rows = enum_lookup.get("rows") or []
+        answer = enum_lookup.get("answer") or build_local_summary(rows)
+        tool_called = bool(sql)
+        metrics = evaluate_run(
+            question=state["question"],
+            sql=sql,
+            result=rows,
+            answer=answer,
+            error=None,
+            rag_items=rag_items,
+            latency_ms=total_ms,
+            tool_called=tool_called,
+        )
+        timings = {
+            "retrieval_ms": retrieval_ms,
+            "agent_model_and_tools_ms": 0,
+            "model_call_count": 0,
+            "first_model_call_ms": 0,
+            "final_model_call_ms": 0,
+            "model_calls_total_ms": 0,
+            "sql_tool_total_ms": 0,
+            "sql_execution_ms": 0,
+            "total_ms": total_ms,
+        }
+        return {
+            **state,
+            "sql": sql,
+            "sql_valid": bool(sql),
+            "result": rows,
+            "error": None,
+            "summary": answer,
+            "answer": answer,
+            "rag_context": rag_items,
+            "metrics": metrics,
+            "clarifications": build_scope_clarifications(matched_scopes),
+            "timings": timings,
+            "debug_info": {
+                "timings": timings,
+                "model_calls": [],
+                "tool_calls": [],
+                "tool_timings": {},
+                "rag_context": rag_items,
+                "matched_scopes": matched_scopes,
+                "sql_examples": sql_examples,
+                "context_usage": context_usage,
+                "enum_lookup": enum_lookup,
+                "data_window": self._available_months(),
+            },
+        }
+
     def _build_user_prompt(
         self,
         question: str,
@@ -749,6 +886,144 @@ RAG 检索到的业务规则：
             )
 
         return None
+
+    def _detect_enum_lookup(self, question: str) -> dict[str, Any] | None:
+        if not self._asks_for_enum_lookup(question):
+            return None
+
+        field = self._pick_enum_field(question)
+        if not field:
+            if self._asks_for_dictionary_lookup(question):
+                return self._build_dictionary_lookup()
+            return None
+        return self._build_field_enum_lookup(question, field)
+
+    def _asks_for_enum_lookup(self, question: str) -> bool:
+        compact = _compact_question(question)
+        has_lookup_phrase = any(_compact_question(phrase) in compact for phrase in ENUM_LOOKUP_PHRASES)
+        if not has_lookup_phrase:
+            return False
+
+        strong_lookup = any(
+            phrase in compact
+            for phrase in {
+                "取值",
+                "枚举",
+                "可选值",
+                "可问范围",
+                "字段字典",
+                "指标字典",
+                "能问哪些",
+                "可以问哪些",
+                "穷举",
+                "列出",
+            }
+        )
+        if strong_lookup:
+            return True
+        return not any(keyword in compact for keyword in ENUM_ANALYSIS_KEYWORDS)
+
+    def _asks_for_dictionary_lookup(self, question: str) -> bool:
+        compact = _compact_question(question)
+        return any(
+            phrase in compact
+            for phrase in {
+                "可问范围",
+                "字段字典",
+                "指标字典",
+                "能问哪些",
+                "可以问哪些",
+                "有哪些字段",
+                "有哪些指标",
+                "有哪些维度",
+            }
+        )
+
+    def _pick_enum_field(self, question: str) -> str | None:
+        compact = _compact_question(question)
+        for field, terms in ENUM_FIELD_TERMS:
+            if any(_compact_question(term) in compact for term in terms):
+                return field
+        return None
+
+    def _build_dictionary_lookup(self) -> dict[str, Any]:
+        enum_values = self.schema_profile.get("enum_values") or {}
+        rows = []
+        for field in ENUM_DISPLAY_LABELS:
+            values = _public_enum_values(enum_values.get(field, []))
+            if not values:
+                continue
+            rows.append(
+                {
+                    "可问维度": ENUM_DISPLAY_LABELS[field],
+                    "可用取值数": len(values),
+                    "示例取值": "、".join(map(str, values[:8])),
+                }
+            )
+        dimension_text = "、".join(row["可问维度"] for row in rows)
+        return {
+            "type": "dictionary_lookup",
+            "sql": None,
+            "rows": rows,
+            "answer": f"当前可问维度包括：{dimension_text}。页面左侧的“可问范围”里可以查看完整取值。",
+        }
+
+    def _build_field_enum_lookup(self, question: str, field: str) -> dict[str, Any]:
+        enum_values = self.schema_profile.get("enum_values") or {}
+        all_values = _public_enum_values(enum_values.get(field, []))
+        matched_values = self._mentioned_enum_values(question, all_values)
+        selected_values = matched_values or all_values
+        label = ENUM_DISPLAY_LABELS.get(field, field)
+        sql = self._build_enum_sql(field, label, matched_values)
+
+        try:
+            rows = execute_query(sql)
+        except Exception:
+            rows = [{label: value} for value in selected_values]
+
+        value_text = "、".join(str(value) for value in selected_values[:30])
+        if len(selected_values) > 30:
+            value_text += f"等 {len(selected_values)} 个取值"
+
+        if field == "city_tier":
+            prefix = "当前数据记录的是城市等级，不包含具体城市名称；"
+        else:
+            prefix = ""
+
+        return {
+            "type": "field_enum_lookup",
+            "field": field,
+            "display_label": label,
+            "matched_values": matched_values,
+            "sql": sql,
+            "rows": rows,
+            "answer": f"{prefix}当前可查询的{label}包括：{value_text}。",
+        }
+
+    def _mentioned_enum_values(self, question: str, values: list[Any]) -> list[Any]:
+        compact = _compact_question(question)
+        matched = []
+        for value in values:
+            if _compact_question(str(value)) in compact:
+                matched.append(value)
+        return matched
+
+    def _build_enum_sql(self, field: str, label: str, matched_values: list[Any]) -> str:
+        conditions = [
+            f"{field} IS NOT NULL",
+            f"TRIM({field}) != ''",
+            f"{field} != 'NA'",
+        ]
+        if matched_values:
+            literal_values = ", ".join(_sql_literal(value) for value in matched_values)
+            conditions.append(f"{field} IN ({literal_values})")
+        where_clause = " AND ".join(conditions)
+        return (
+            f'SELECT DISTINCT {field} AS "{label}"\n'
+            f"FROM {TABLE_NAME}\n"
+            f"WHERE {where_clause}\n"
+            f"ORDER BY {field};"
+        )
 
     def _mentioned_app_terms(self, question: str) -> set[str]:
         compact = _compact_question(question)
@@ -1090,6 +1365,15 @@ def _compact_question(text: str) -> str:
 
 def _contains_any_compact(text: str, keywords: set[str]) -> bool:
     return any(keyword.lower().replace(" ", "") in text for keyword in keywords)
+
+
+def _public_enum_values(values: list[Any]) -> list[Any]:
+    hidden_values = {"", "NA", "N/A", "NULL", "NONE", "None", "null", "nan"}
+    return [value for value in values if str(value).strip() not in hidden_values]
+
+
+def _sql_literal(value: Any) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
 
 
 def _strip_reasoning_process_text(text: str) -> str:

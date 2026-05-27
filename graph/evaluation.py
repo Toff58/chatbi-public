@@ -59,6 +59,7 @@ def _expected_rag_ids(question: str) -> set[str]:
         ("young_users", ["年轻", "青年", "年轻人", "低龄"]),
         ("lower_tier_city", ["下沉", "低线", "三线", "四线", "五线"]),
         ("month_filter", ["月", "月份", "趋势", "时间"]),
+        ("dimension_enum_lookup", ["有哪些", "取值", "枚举", "穷举", "可问范围", "字段字典", "指标字典"]),
         ("aggregation_default", ["多少", "哪些", "分布", "占比", "统计"]),
     ]
     expected = set()

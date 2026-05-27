@@ -22,6 +22,8 @@ Streamlit 前端入口。
 - 启动时检查 SQLite 是否与 CSV 行数和导入元数据一致；不一致时自动覆盖导入 CSV。
 - 图表使用 Altair 显式指定 x 轴排序，确保柱状图按指标降序从左到右展示。
 - 表格和图表会过滤常见中间计算列，避免前端暴露宏观人数估算过程。
+- 图表标题、tooltip、图例、明细表和下载文件会把底层字段名转换为业务展示名，例如 `user_count` 展示为“用户数”。
+- 侧边栏新增“可问范围”页面，提供指标字典和字段字典，展示可问维度、可用取值和指标口径。
 
 调试策略：
 - 完整调试信息始终写入 `query_debug.jsonl`，便于开发复盘。
@@ -49,6 +51,7 @@ LangChain Agent 主逻辑。
 - 单个 App 或按 `app_name` 排行的画像人群总用户数直接 `SUM(ppl_cnt)`。
 - 固定 base 人数为 6 亿，任何返回给前端的人数都不能超过 6 亿。
 - 当前数据只包含 `2025-07` 一个月；用户查询其他月份或趋势、环比、同比时，Agent 会在调用模型前直接说明数据限制，不生成跨月 SQL。
+- 用户询问“有哪些/取值/枚举/穷举/可问范围”等字段取值类问题时，Agent 会在调用模型前直接返回对应维度枚举，不改写成人数统计或排行。
 - 省份、城市等级、性别、年龄、收入等宏观人群人数先算有效样本占比，再用 base 乘以占比估算。
 - 工具层会阻断 SQL 里对 `ppl_cnt` 的二次放大表达式，避免结果被重复换算。
 - 工具层会阻断直接输出宏观 `SUM(ppl_cnt)`、超过 base 的人数结果和中间计算列。
@@ -61,6 +64,7 @@ LangChain Agent 主逻辑。
 - 维护业务规则、人数口径、rebase 规则和字段上下文。
 - 根据问题检索相关规则，注入 Agent prompt。
 - 从 `graph/sql_examples.py` 读取可检索 SQL 样例。
+- 补充字段取值枚举规则，约束“有哪些/可选值/字段字典”类问题只返回维度 DISTINCT 取值。
 - 不依赖外部向量库，方便本地直接运行。
 
 ### `graph/sql_examples.py`
@@ -70,7 +74,7 @@ LangChain Agent 主逻辑。
 职责：
 - 维护可供 RAG 检索的问题-SQL 样例。
 - 标记少量 `include_in_prompt` 样例，让 SQL prompt 保留固定 few-shot。
-- 覆盖 App 排行、画像筛选 App 排行、宏观省份人数、女性占比 rebase 等高风险口径。
+- 覆盖 App 排行、画像筛选 App 排行、宏观省份人数、女性占比 rebase、字段取值枚举等高风险口径。
 
 ### `graph/business_terms.py`
 
@@ -471,3 +475,26 @@ Conventional Commit summary:
 
 Conventional Commit summary:
 - `fix(app): export titled chart jpg without clipped edges`
+
+### 2026-05-27 展示名与可问范围优化
+
+需求识别：
+- 图表标题、tooltip、图例和明细表不应直接暴露 `user_count`、`ppl_cnt`、`estimated_user_count` 等底层字段名。
+- “有哪些/取值/枚举/穷举”类问题本质是字段取值查询，应直接返回维度枚举，而不是被改写成人数、排行或占比问题。
+- 前端需要一个用户可见的字段字典/指标字典页面，帮助用户提前了解可问范围，减少无效问题。
+
+改动结果：
+- `app.py` 新增业务展示名映射，图表标题、Altair tooltip、分组图例、明细表和下载文件统一展示“用户数”“估算用户数”“城市等级”等业务名称。
+- `app.py` 新增“可问范围”页面，展示指标字典和字段字典；字段字典读取 `schema_profile.enum_values`，隐藏 NA/空白等无效取值。
+- `graph/agent.py` 新增字段取值类问题前置识别；命中“有哪些/取值/枚举/穷举/可问范围”且不是排行/人数意图时，不调用模型，直接返回对应维度 DISTINCT 取值。
+- `graph/rag.py`、`graph/prompts/*` 和 `data/sql_examples.json` 补充字段枚举规则与示例，作为模型侧兜底约束。
+- `graph/evaluation.py` 补充字段枚举类问题的 RAG 期望项。
+
+验证：
+- 执行 `python -m py_compile app.py graph\agent.py graph\rag.py graph\evaluation.py deepseek_client.py` 通过。
+- 执行 `python test_graph.py` 通过。
+- 轻量验证“我国有哪些三线城市？”命中枚举逻辑，返回城市等级“三线城市”，模型调用次数为 0。
+- 轻量验证 App Top 样例图表标题为“App 用户规模 Top 3”，明细列展示为“App”“用户数”。
+
+Conventional Commit summary:
+- `feat(app): add business labels and query scope dictionary`

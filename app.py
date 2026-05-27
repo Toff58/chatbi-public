@@ -4,6 +4,7 @@ import io
 import json
 import math
 import os
+import re
 import sqlite3
 import uuid
 import zipfile
@@ -20,6 +21,7 @@ import streamlit as st
 from config import DATA_CSV_PATH, DB_PATH, IMPORT_METADATA_TABLE, TABLE_NAME
 from data.import_csv_to_db import import_csv_to_sqlite
 from graph.workflow import build_graph
+from sql.executor import get_schema_profile
 
 
 LOG_DIR = Path("logs")
@@ -47,6 +49,68 @@ HIDDEN_DISPLAY_COLUMN_FRAGMENTS = {
 }
 RATIO_COLUMN_FRAGMENTS = {"ratio", "rate", "percent", "pct", "share", "占比", "比例"}
 MONTH_COLUMN_NAMES = {"active_month", "month", "月份", "活跃月份"}
+DISPLAY_COLUMN_LABELS = {
+    "app_name": "App",
+    "category": "品类",
+    "category_new": "细分品类",
+    "active_month": "月份",
+    "city_tier": "城市等级",
+    "income": "收入段",
+    "gender": "性别",
+    "province": "省份",
+    "age": "年龄段",
+    "ppl_cnt": "用户数",
+    "user_count": "用户数",
+    "estimated_user_count": "估算用户数",
+    "female_percent": "女性占比",
+}
+DISPLAY_TOKEN_LABELS = {
+    "estimated": "估算",
+    "total": "总",
+    "avg": "平均",
+    "average": "平均",
+    "app": "App",
+    "user": "用户",
+    "users": "用户",
+    "count": "数",
+    "cnt": "数",
+    "number": "数量",
+    "female": "女性",
+    "male": "男性",
+    "percent": "占比",
+    "pct": "占比",
+    "ratio": "占比",
+    "share": "占比",
+    "rate": "占比",
+}
+DICTIONARY_DIMENSION_ORDER = [
+    "app_name",
+    "category",
+    "category_new",
+    "city_tier",
+    "income",
+    "gender",
+    "province",
+    "age",
+    "active_month",
+]
+METRIC_DICTIONARY_ROWS = [
+    {
+        "指标": "用户数",
+        "适用问题": "某个 App 或带画像筛选的 App 排行、Top、最多等问题",
+        "展示口径": "按 App 汇总满足条件的人群规模",
+    },
+    {
+        "指标": "估算用户数",
+        "适用问题": "省份、城市等级、性别、年龄、收入等宏观人群规模问题",
+        "展示口径": "按有效样本占比估算总体人群规模",
+    },
+    {
+        "指标": "占比",
+        "适用问题": "性别、年龄段、收入段、城市等级等分布或比例问题",
+        "展示口径": "排除缺失取值后计算有效样本内占比",
+    },
+]
 
 
 def ensure_database() -> None:
@@ -322,6 +386,67 @@ def build_sorted_dataframe(rows: list[dict[str, Any]]) -> pd.DataFrame:
     return df
 
 
+def build_display_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    display_df = df.copy()
+    display_df.columns = _unique_display_column_labels(display_df.columns)
+    return display_df
+
+
+def _unique_display_column_labels(columns: Any) -> list[str]:
+    labels = [_display_column_label(column) for column in columns]
+    counts: dict[str, int] = {}
+    unique_labels = []
+    for label in labels:
+        counts[label] = counts.get(label, 0) + 1
+        unique_labels.append(label if counts[label] == 1 else f"{label}{counts[label]}")
+    return unique_labels
+
+
+def _display_label_map(columns: list[str]) -> dict[str, str]:
+    return dict(zip(columns, _unique_display_column_labels(columns)))
+
+
+def _display_column_label(column: Any) -> str:
+    raw = str(column)
+    lowered = raw.lower()
+    if raw in DISPLAY_COLUMN_LABELS:
+        return DISPLAY_COLUMN_LABELS[raw]
+    if lowered in DISPLAY_COLUMN_LABELS:
+        return DISPLAY_COLUMN_LABELS[lowered]
+    if any("\u4e00" <= character <= "\u9fff" for character in raw):
+        return raw
+    if _is_user_count_column(raw):
+        return "用户数"
+    if _is_ratio_column(raw):
+        return "占比"
+
+    tokens = [token for token in re.split(r"[_\s]+", lowered) if token]
+    rendered_tokens = [DISPLAY_TOKEN_LABELS.get(token, token) for token in tokens]
+    if rendered_tokens and all(token in DISPLAY_TOKEN_LABELS for token in tokens):
+        label = "".join(rendered_tokens)
+        return label.replace("用户数数", "用户数").replace("占比占比", "占比")
+    return raw.replace("_", " ").strip() or "指标"
+
+
+def _chart_metric_label(column: str) -> str:
+    if _is_user_count_column(column):
+        return "用户规模"
+    if _is_ratio_column(column):
+        return "占比"
+    return _display_column_label(column)
+
+
+def _is_user_count_column(column: Any) -> bool:
+    lowered = str(column).lower()
+    if lowered in {"ppl_cnt", "user_count", "estimated_user_count"}:
+        return True
+    if "用户" in str(column) and any(fragment in str(column) for fragment in {"数", "人数", "规模"}):
+        return True
+    return "user" in lowered and any(fragment in lowered for fragment in {"count", "cnt", "number"})
+
+
 def _is_hidden_display_column(column: str) -> bool:
     lowered = column.lower()
     return any(fragment in lowered for fragment in HIDDEN_DISPLAY_COLUMN_FRAGMENTS)
@@ -352,7 +477,10 @@ def build_chart_spec(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
             "x_column": dimension_column,
             "y_column": y_column,
             "y_columns": [y_column],
-            "title": _build_chart_title("line", dimension_column, [y_column]),
+            "x_label": _display_column_label(dimension_column),
+            "y_label": _display_column_label(y_column),
+            "metric_labels": _display_label_map([y_column]),
+            "title": _build_chart_title("line", dimension_column, [y_column], len(chart_df)),
         }
 
     if len(numeric_columns) >= 2 and len(df) <= 12:
@@ -365,7 +493,10 @@ def build_chart_spec(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
                 "x_column": dimension_column,
                 "y_column": None,
                 "y_columns": y_columns,
-                "title": _build_chart_title("grouped_bar", dimension_column, y_columns),
+                "x_label": _display_column_label(dimension_column),
+                "y_label": None,
+                "metric_labels": _display_label_map(y_columns),
+                "title": _build_chart_title("grouped_bar", dimension_column, y_columns, len(chart_df)),
             }
 
     y_column = numeric_columns[0]
@@ -380,7 +511,10 @@ def build_chart_spec(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
             "x_column": dimension_column,
             "y_column": y_column,
             "y_columns": [y_column],
-            "title": _build_chart_title("pie", dimension_column, [y_column]),
+            "x_label": _display_column_label(dimension_column),
+            "y_label": _display_column_label(y_column),
+            "metric_labels": _display_label_map([y_column]),
+            "title": _build_chart_title("pie", dimension_column, [y_column], len(chart_df)),
         }
 
     return {
@@ -389,19 +523,36 @@ def build_chart_spec(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
         "x_column": dimension_column,
         "y_column": y_column,
         "y_columns": [y_column],
-        "title": _build_chart_title("bar", dimension_column, [y_column]),
+        "x_label": _display_column_label(dimension_column),
+        "y_label": _display_column_label(y_column),
+        "metric_labels": _display_label_map([y_column]),
+        "title": _build_chart_title("bar", dimension_column, [y_column], len(chart_df)),
     }
 
 
-def _build_chart_title(chart_type: str, x_column: str, y_columns: list[str]) -> str:
+def _build_chart_title(
+    chart_type: str,
+    x_column: str,
+    y_columns: list[str],
+    row_count: int | None = None,
+) -> str:
     primary_metric = y_columns[0] if y_columns else "指标"
+    dimension_label = _display_column_label(x_column)
+    metric_label = _chart_metric_label(primary_metric)
     if chart_type == "line":
-        return f"{primary_metric} 按 {x_column} 趋势"
+        return f"{metric_label}趋势"
     if chart_type == "grouped_bar":
-        return f"{x_column} 多指标对比"
+        return f"不同{dimension_label}的指标对比"
     if chart_type == "pie":
-        return f"{primary_metric} 占比"
-    return f"{primary_metric} 排行"
+        return f"{dimension_label}占比结构"
+    if _is_ratio_column(primary_metric):
+        return f"{dimension_label}占比分布"
+    if _is_user_count_column(primary_metric):
+        if str(x_column).lower() == "app_name":
+            suffix = f" Top {row_count}" if row_count else ""
+            return f"App 用户规模{suffix}"
+        return f"不同{dimension_label}的用户规模"
+    return f"不同{dimension_label}的{metric_label}对比"
 
 
 def _numeric_columns(df: pd.DataFrame) -> list[str]:
@@ -454,6 +605,8 @@ def build_altair_chart(chart_spec: dict[str, Any]) -> alt.Chart | None:
     chart_df = chart_spec["data"].copy()
     x_column = chart_spec["x_column"]
     y_column = chart_spec["y_column"]
+    x_label = chart_spec.get("x_label") or _display_column_label(x_column)
+    y_label = chart_spec.get("y_label") or _display_column_label(y_column)
 
     if chart_type == "line" and x_column and y_column:
         chart_df[x_column] = chart_df[x_column].astype(str)
@@ -464,8 +617,8 @@ def build_altair_chart(chart_spec: dict[str, Any]) -> alt.Chart | None:
                 x=alt.X(f"{x_column}:N", sort=chart_df[x_column].tolist(), title=None),
                 y=alt.Y(f"{y_column}:Q", title=None),
                 tooltip=[
-                    alt.Tooltip(f"{x_column}:N", title=x_column),
-                    alt.Tooltip(f"{y_column}:Q", title=y_column, format=","),
+                    alt.Tooltip(f"{x_column}:N", title=x_label),
+                    alt.Tooltip(f"{y_column}:Q", title=y_label, format=","),
                 ],
             )
             .properties(height=340, title=chart_spec["title"])
@@ -480,8 +633,8 @@ def build_altair_chart(chart_spec: dict[str, Any]) -> alt.Chart | None:
                 theta=alt.Theta(f"{y_column}:Q", title=None),
                 color=alt.Color(f"{x_column}:N", title=None),
                 tooltip=[
-                    alt.Tooltip(f"{x_column}:N", title=x_column),
-                    alt.Tooltip(f"{y_column}:Q", title=y_column, format=","),
+                    alt.Tooltip(f"{x_column}:N", title=x_label),
+                    alt.Tooltip(f"{y_column}:Q", title=y_label, format=","),
                 ],
             )
             .properties(height=360, title=chart_spec["title"])
@@ -489,12 +642,14 @@ def build_altair_chart(chart_spec: dict[str, Any]) -> alt.Chart | None:
 
     if chart_type == "grouped_bar" and x_column:
         y_columns = chart_spec["y_columns"]
+        metric_labels = chart_spec.get("metric_labels") or _display_label_map(y_columns)
         folded_df = chart_df.melt(
             id_vars=[x_column],
             value_vars=y_columns,
             var_name="metric",
             value_name="value",
         )
+        folded_df["metric"] = folded_df["metric"].map(metric_labels).fillna(folded_df["metric"])
         folded_df[x_column] = folded_df[x_column].astype(str)
         return (
             alt.Chart(folded_df)
@@ -505,7 +660,7 @@ def build_altair_chart(chart_spec: dict[str, Any]) -> alt.Chart | None:
                 color=alt.Color("metric:N", title=None),
                 xOffset="metric:N",
                 tooltip=[
-                    alt.Tooltip(f"{x_column}:N", title=x_column),
+                    alt.Tooltip(f"{x_column}:N", title=x_label),
                     alt.Tooltip("metric:N", title="指标"),
                     alt.Tooltip("value:Q", title="数值", format=","),
                 ],
@@ -514,16 +669,33 @@ def build_altair_chart(chart_spec: dict[str, Any]) -> alt.Chart | None:
         )
 
     if chart_type == "bar" and x_column and y_column:
-        return build_bar_chart(chart_df, x_column, y_column, chart_spec["title"])
+        return build_bar_chart(
+            chart_df,
+            x_column,
+            y_column,
+            chart_spec["title"],
+            x_label=x_label,
+            y_label=y_label,
+        )
 
     return None
 
 
-def build_bar_chart(chart_df: pd.DataFrame, x_column: str, y_column: str, title: str) -> alt.Chart:
+def build_bar_chart(
+    chart_df: pd.DataFrame,
+    x_column: str,
+    y_column: str,
+    title: str,
+    *,
+    x_label: str | None = None,
+    y_label: str | None = None,
+) -> alt.Chart:
     sorted_df = chart_df.sort_values(y_column, ascending=False).copy()
     sorted_df[x_column] = sorted_df[x_column].astype(str)
     sort_order = list(reversed(sorted_df[x_column].tolist()))
     height = max(280, min(520, len(sorted_df) * 36))
+    x_label = x_label or _display_column_label(x_column)
+    y_label = y_label or _display_column_label(y_column)
     chart = (
         alt.Chart(sorted_df)
         .mark_bar()
@@ -531,8 +703,8 @@ def build_bar_chart(chart_df: pd.DataFrame, x_column: str, y_column: str, title:
             y=alt.Y(f"{x_column}:N", sort=sort_order, title=None),
             x=alt.X(f"{y_column}:Q", title=None),
             tooltip=[
-                alt.Tooltip(f"{x_column}:N", title=x_column),
-                alt.Tooltip(f"{y_column}:Q", title=y_column, format=","),
+                alt.Tooltip(f"{x_column}:N", title=x_label),
+                alt.Tooltip(f"{y_column}:Q", title=y_label, format=","),
             ],
         )
         .properties(height=height, title=title)
@@ -762,7 +934,7 @@ def _build_grouped_bar_image(chart_spec: dict[str, Any]) -> Any | None:
     chart_width = width - left - right
     image, draw = _new_chart_image(width, height)
     _draw_image_title(draw, chart_spec["title"], width)
-    _draw_image_legend(draw, y_columns, 42, 78)
+    _draw_image_legend(draw, _chart_metric_labels(chart_spec, y_columns), 42, 78)
 
     label_font = _image_font(17)
     value_font = _image_font(13)
@@ -916,6 +1088,12 @@ def _draw_image_title(draw: Any, title: str, width: int) -> None:
     font = _image_font(30, bold=True)
     title_text = _fit_image_text(draw, title, font, width - 80)
     draw.text((40, 28), title_text, fill="#111827", font=font)
+
+
+def _chart_metric_labels(chart_spec: dict[str, Any], y_columns: list[str] | None = None) -> list[str]:
+    columns = y_columns or chart_spec.get("y_columns") or []
+    metric_labels = chart_spec.get("metric_labels") or _display_label_map(columns)
+    return [metric_labels.get(column, _display_column_label(column)) for column in columns]
 
 
 def _draw_image_legend(draw: Any, labels: list[str], x: int, y: int) -> None:
@@ -1191,6 +1369,42 @@ def _coerce_float(value: Any) -> float:
     return number
 
 
+@st.cache_data(show_spinner=False)
+def load_data_dictionary() -> dict[str, list[Any]]:
+    profile = get_schema_profile()
+    enum_values = profile.get("enum_values") or {}
+    return {
+        field: _public_enum_values(enum_values.get(field, []))
+        for field in DICTIONARY_DIMENSION_ORDER
+        if enum_values.get(field)
+    }
+
+
+def _public_enum_values(values: list[Any]) -> list[Any]:
+    hidden_values = {"", "NA", "N/A", "NULL", "NONE", "None", "null", "nan"}
+    return [value for value in values if str(value).strip() not in hidden_values]
+
+
+def render_dictionary_page() -> None:
+    metric_tab, dimension_tab = st.tabs(["指标字典", "字段字典"])
+    with metric_tab:
+        st.dataframe(pd.DataFrame(METRIC_DICTIONARY_ROWS), width="stretch", hide_index=True)
+
+    with dimension_tab:
+        dictionary = load_data_dictionary()
+        available_fields = [field for field in DICTIONARY_DIMENSION_ORDER if dictionary.get(field)]
+        if not available_fields:
+            st.info("当前没有可展示的字段取值。")
+            return
+
+        available_labels = [_display_column_label(field) for field in available_fields]
+        selected_label = st.selectbox("维度", available_labels, index=0)
+        selected_field = available_fields[available_labels.index(selected_label)]
+        values = dictionary.get(selected_field, [])
+        st.caption(f"{selected_label} 共 {len(values)} 个可用取值")
+        st.dataframe(pd.DataFrame({"可用取值": values}), width="stretch", hide_index=True)
+
+
 def ask(question: str, session_id: str | None = None) -> dict[str, Any]:
     app = build_graph()
     initial_state = {
@@ -1256,17 +1470,18 @@ def render_answer_state(state: dict[str, Any], key_prefix: str) -> None:
         return
 
     result_df = build_sorted_dataframe(rows)
+    display_df = build_display_dataframe(result_df)
     chart_spec = build_chart_spec(rows)
     if chart_spec:
         chart_tab, table_tab = st.tabs(["图表", "明细"])
         with chart_tab:
             render_chart(chart_spec)
         with table_tab:
-            st.dataframe(result_df, width="stretch", hide_index=True)
+            st.dataframe(display_df, width="stretch", hide_index=True)
     else:
-        st.dataframe(result_df, width="stretch", hide_index=True)
+        st.dataframe(display_df, width="stretch", hide_index=True)
 
-    render_download_buttons(result_df, chart_spec, key_prefix)
+    render_download_buttons(display_df, chart_spec, key_prefix)
 
 
 def run_question(question: str) -> None:
@@ -1305,17 +1520,23 @@ if "session_id" not in st.session_state:
     st.session_state.session_id = uuid.uuid4().hex
 
 with st.sidebar:
+    page = st.radio("导航", ["智能问数", "可问范围"], label_visibility="collapsed")
     st.info("公开演示版仅包含 2025-07 数据。")
     st.divider()
-    st.subheader("示例问题")
-    for example in EXAMPLE_QUESTIONS:
-        if st.button(example, use_container_width=True):
-            st.session_state.pending_question = example
-    st.divider()
-    if st.button("清空会话", use_container_width=True):
-        st.session_state.messages = []
-        st.session_state.pending_question = None
-        st.rerun()
+    if page == "智能问数":
+        st.subheader("示例问题")
+        for example in EXAMPLE_QUESTIONS:
+            if st.button(example, use_container_width=True):
+                st.session_state.pending_question = example
+        st.divider()
+        if st.button("清空会话", use_container_width=True):
+            st.session_state.messages = []
+            st.session_state.pending_question = None
+            st.rerun()
+
+if page == "可问范围":
+    render_dictionary_page()
+    st.stop()
 
 for index, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
