@@ -69,12 +69,14 @@ class ChatBIAgentApp:
     def retrieve_context(self, state: ChatBIState) -> dict[str, Any]:
         started_at = time.perf_counter()
         question = state["question"]
-        memory = load_memory()
+        session_id = state.get("session_id")
+        memory = load_memory(session_id=session_id)
         memory_context = build_memory_context(memory)
         matched_scopes = match_business_scopes(question)
         rag_items = retrieve_sql_context(question, self.schema_profile)
         sql_examples = retrieve_sql_examples(question)
         context_usage = self._build_context_usage(rag_items, matched_scopes, sql_examples)
+        context_usage["memory_session_id"] = session_id or "default"
         context_usage["memory_applied"] = bool(memory.get("recent_interactions"))
         context_usage["memory_item_count"] = len(memory.get("recent_interactions") or [])
         retrieval_ms = int((time.perf_counter() - started_at) * 1000)
@@ -183,6 +185,7 @@ class ChatBIAgentApp:
                     sql=parsed["sql"],
                     answer=parsed["answer"],
                     result=parsed["result"],
+                    session_id=state.get("session_id"),
                 )
             except OSError:
                 pass
@@ -232,6 +235,7 @@ class ChatBIAgentApp:
                     "matched_scopes": matched_scopes,
                     "sql_examples": sql_examples,
                     "memory_context": memory_context,
+                    "session_id": state.get("session_id"),
                     "context_usage": context_usage,
                     "data_window": self.preflight.available_months(),
                 },
@@ -334,6 +338,7 @@ class ChatBIAgentApp:
                 "rag_context": rag_items,
                 "matched_scopes": matched_scopes,
                 "sql_examples": sql_examples,
+                "session_id": state.get("session_id"),
                 "context_usage": context_usage,
                 "data_issue": data_issue,
                 "guardrail_issue": data_issue,
@@ -397,6 +402,7 @@ class ChatBIAgentApp:
                 "rag_context": rag_items,
                 "matched_scopes": matched_scopes,
                 "sql_examples": sql_examples,
+                "session_id": state.get("session_id"),
                 "context_usage": context_usage,
                 "data_window": self.preflight.available_months(),
             },
@@ -459,6 +465,7 @@ class ChatBIAgentApp:
                 "rag_context": rag_items,
                 "matched_scopes": matched_scopes,
                 "sql_examples": sql_examples,
+                "session_id": state.get("session_id"),
                 "context_usage": context_usage,
                 "enum_lookup": enum_lookup,
                 "data_window": self.preflight.available_months(),

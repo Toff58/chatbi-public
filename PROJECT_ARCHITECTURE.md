@@ -14,10 +14,13 @@ Streamlit 前端入口，现在只保留页面流程和聊天交互。
 
 职责：
 - 渲染问数工作台、会话历史、示例问题和 `st.chat_input()` 输入。
+- 从 URL 查询参数读取或生成 `session_id`，并把它传入 Agent state。
+- 按 `session_id` 加载和保存页面会话历史，刷新同一 URL 后可以恢复最近问答。
 - 展示查询进度、结论、图表/明细 tabs、耗时和返回行数。
 - 调用 `ui.database.ensure_database()` 做数据库一致性检查。
 - 调用 `graph.workflow.build_graph()` 发起问数。
 - 调用 `ui.*` 模块完成日志、表格、图表、下载和可问范围展示。
+- 点击“清空会话”时同步清除当前 session 的页面历史和轻量 memory。
 - 不展示 SQL、RAG、验收指标、分子、分母、rebase 过程等调试或计算过程。
 
 调试策略：
@@ -39,6 +42,7 @@ Streamlit 应用层辅助模块。
 - `ui/chart_svg_export.py`：生成 SVG 图表。
 - `ui/chart_export_utils.py`：复用图表导出格式化工具。
 - `ui/dictionary.py`：渲染“可问范围”页面，包括指标字典和字段字典。
+- `ui/session_history.py`：按 `session_id` 持久化页面会话历史。
 
 ### `graph/workflow.py`
 
@@ -65,7 +69,7 @@ Agent 运行时。
 
 职责：
 - 使用 `langchain.agents.create_agent` 构建 SQL 分析 Agent。
-- 注入 RAG 上下文和固定业务范围映射。
+- 注入当前 `session_id` 对应的轻量 memory、RAG 上下文和固定业务范围映射。
 - 解析最后一次工具调用的 SQL，避免展示 SQL 与最终答案不一致。
 - 记录模型调用、SQL 工具、RAG 检索、业务口径说明和验收指标。
 - 把上下文检索、预检、分支响应和 SQL Agent 执行拆成可由 `graph/nodes.py` 调用的方法。
@@ -135,6 +139,16 @@ LangChain 工具和 SQL 结果保护。
 - 避免模型创造不存在的品类。
 - 当前“休闲娱乐”固定为 `category IN ('娱乐休闲')`。
 
+### `graph/memory.py`
+
+轻量上下文记忆。
+
+职责：
+- 根据 `session_id` 将 memory 写入 `logs/memory/<session_id>.json`，避免公开 demo 不同访客共享上下文。
+- 记录最近问题、SQL、主题、筛选条件、结果数量和答案预览。
+- 生成注入 prompt 的短期上下文文本，帮助后续追问参考最近一次筛选和主题。
+- 保留无 `session_id` 时的旧单文件路径，方便命令行或兼容脚本继续运行。
+
 ### `graph/evaluation.py`
 
 单次运行验收指标计算。
@@ -197,32 +211,51 @@ SQLite 查询执行层。
 
 ### 查询日志
 
-文件：`query_log.csv`
+文件：`logs/query_log.csv`
 
 用途：
-- 记录每次用户问题、SQL、答案、错误和验收指标。
+- 记录每次 `session_id`、用户问题、SQL、答案、错误和验收指标。
 - 适合做运行质量统计。
 
 ### 调试日志
 
-文件：`query_debug.jsonl`
+文件：`logs/query_debug.jsonl`
 
 用途：
 - 记录完整模型过程相关信息，包括 SQL、RAG、工具调用、耗时和匹配到的业务口径。
 - 前端调试开关展示的是该信息的子集。
 
+### Session Memory
+
+文件：`logs/memory/<session_id>.json`
+
+用途：
+- 按 session 隔离最近几次问数上下文。
+- `retrieve_context` 只读取当前 session 的 memory，不会把其他访客的问题注入 prompt。
+- `run_sql_agent` 成功解析结果后更新当前 session memory。
+
+### 页面会话历史
+
+文件：`logs/chat_sessions/<session_id>.json`
+
+用途：
+- 按 session 保存最近 20 条页面消息。
+- 同一 URL 刷新后恢复可见问答历史。
+- 点击“清空会话”时删除当前 session 的历史文件和 memory 文件。
+
 ## 当前运行链路
 
-1. 用户在 `app.py` 输入问题。
-2. `app.py` 调用 `graph.workflow.build_graph()`。
-3. `build_graph()` 返回 LangGraph `CompiledStateGraph`。
-4. `retrieve_context` 节点检索 schema、字段枚举、RAG 规则、few-shot 示例、业务词映射和可选轻量 memory。
-5. `preflight_guardrails` 节点判断数据范围、不可支持问题、字段枚举问法和未知字段。
-6. 条件边把请求路由到 `respond_informational`、`respond_enum_lookup`、`respond_failure` 或 `run_sql_agent`。
-7. `run_sql_agent` 使用 LangChain `create_agent` 生成 SQL，并强制调用 `query_app_data`。
-8. `query_app_data` 工具校验 SQL，执行 SQLite 查询，并阻断超过 6 亿的人数结果、宏观直接求和和中间计算列。
-9. Agent 根据工具结果生成中文结论。
-10. `app.py` 通过 `ui.*` 模块展示结论、图表和明细，并写入日志。
+1. 用户打开 `app.py` 页面，应用从 URL 读取或生成 `session_id`。
+2. 用户在 `app.py` 输入问题。
+3. `app.py` 调用 `graph.workflow.build_graph()`，并把 `session_id` 放进初始 state。
+4. `build_graph()` 返回 LangGraph `CompiledStateGraph`。
+5. `retrieve_context` 节点检索 schema、字段枚举、RAG 规则、few-shot 示例、业务词映射和当前 session 的轻量 memory。
+6. `preflight_guardrails` 节点判断数据范围、不可支持问题、字段枚举问法和未知字段。
+7. 条件边把请求路由到 `respond_informational`、`respond_enum_lookup`、`respond_failure` 或 `run_sql_agent`。
+8. `run_sql_agent` 使用 LangChain `create_agent` 生成 SQL，并强制调用 `query_app_data`。
+9. `query_app_data` 工具校验 SQL，执行 SQLite 查询，并阻断超过 6 亿的人数结果、宏观直接求和和中间计算列。
+10. Agent 根据工具结果生成中文结论，并更新当前 session 的 memory。
+11. `app.py` 通过 `ui.*` 模块展示结论、图表和明细，保存页面会话历史，并写入日志。
 
 ## 文档维护规则
 
@@ -561,9 +594,34 @@ Conventional Commit summary:
 
 验证：
 - 执行 `.\.venv\Scripts\python.exe -m compileall -q app.py main.py graph ui sql data tests` 通过。
-- 执行 `.\.venv\Scripts\python.exe test_graph.py` 通过。
+- 执行 `python test_graph.py` 通过。
 - 轻量验证“有哪些城市等级可以问？”命中 `enum_lookup` 分支，模型调用次数为 0。
 - 轻量验证“最近几个月用户数趋势如何？”命中 `informational` 分支，不生成跨月 SQL。
 
 Conventional Commit summary:
 - `refactor(graph): expose langgraph nodes and split ui modules`
+
+### 2026-05-28 Session Memory 持久化
+
+需求识别：
+- 公开 demo 会同时面对多个访客，原先单文件 `logs/lightweight_memory.json` 会让不同访客共享上下文。
+- 页面历史只存在 Streamlit `session_state`，刷新后不可恢复，不利于公开展示多轮 memory。
+- 需要让 Agent、日志和页面历史都带同一个 `session_id`，便于隔离和复盘。
+
+改动结果：
+- 新增 `session_ids.py`，统一规范化 `session_id`，避免把 URL 参数直接拼成文件路径。
+- `app.py` 首次打开自动生成 `session_id` 并写入 URL；已有 `session_id` 时直接复用。
+- 新增 `ui/session_history.py`，把最近 20 条页面消息保存到 `logs/chat_sessions/<session_id>.json`。
+- `graph/memory.py` 改为按 `logs/memory/<session_id>.json` 读写轻量 memory，并保留无 session 时的旧路径兼容。
+- `graph/agent.py` 从 state 读取 `session_id`，只加载和更新当前 session 的 memory。
+- 查询日志和调试日志增加 `session_id` 字段；“清空会话”会同时删除当前 session 的页面历史和 memory。
+
+验证：
+- 执行 `.\.venv\Scripts\python.exe -m compileall app.py main.py session_ids.py graph ui tests test_graph.py` 通过。
+- 执行 `python test_graph.py` 通过。
+- 临时目录 smoke test 验证同一 session 能读回 memory，不同 session 互不串。
+- 执行 `.\.venv\Scripts\python.exe main.py --session-id codex-smoke "有哪些城市等级可以问？"` 通过，枚举分支不调用模型。
+- 当前环境没有 `DEEPSEEK_API_KEY`，未运行需要模型 API 的完整 SQL Agent 回归。
+
+Conventional Commit summary:
+- `feat(memory): persist demo memory by session id`

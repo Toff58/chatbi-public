@@ -3,20 +3,26 @@ from typing import Any
 
 import streamlit as st
 
+from graph.memory import clear_memory
 from graph.workflow import build_graph
+from session_ids import normalize_session_id
 from ui.charts import build_chart_spec, render_chart
 from ui.database import ensure_database
 from ui.dataframe import build_display_dataframe, build_sorted_dataframe
 from ui.dictionary import render_dictionary_page
 from ui.downloads import render_download_buttons
 from ui.query_logging import save_logs
+from ui.session_history import clear_session_messages, load_session_messages, save_session_messages
 
 
-def ask(question: str, session_id: str | None = None) -> dict[str, Any]:
+SESSION_QUERY_PARAM = "session_id"
+
+
+def ask(question: str, session_id: str) -> dict[str, Any]:
     app = build_graph()
     initial_state = {
-        "question": question,
         "session_id": session_id,
+        "question": question,
         "sql": None,
         "sql_valid": False,
         "summary": None,
@@ -32,6 +38,43 @@ def ask(question: str, session_id: str | None = None) -> dict[str, Any]:
     result = app.invoke(initial_state)
     save_logs(question, result)
     return result
+
+
+def ensure_session_id() -> str:
+    query_session_id = _read_query_session_id()
+    existing_session_id = st.session_state.get("session_id")
+    session_id = normalize_session_id(query_session_id or existing_session_id, fallback="")
+    if not session_id:
+        session_id = uuid.uuid4().hex
+
+    if query_session_id != session_id:
+        st.query_params[SESSION_QUERY_PARAM] = session_id
+
+    st.session_state.session_id = session_id
+    return session_id
+
+
+def load_current_session_messages(session_id: str) -> None:
+    if (
+        "messages" not in st.session_state
+        or st.session_state.get("_messages_session_id") != session_id
+    ):
+        st.session_state.messages = load_session_messages(session_id)
+        st.session_state._messages_session_id = session_id
+        st.session_state.pending_question = None
+
+
+def persist_current_session_messages() -> None:
+    save_session_messages(st.session_state.session_id, st.session_state.messages)
+
+
+def _read_query_session_id() -> str | None:
+    value = st.query_params.get(SESSION_QUERY_PARAM)
+    if isinstance(value, list):
+        return str(value[0]) if value else None
+    if value is None:
+        return None
+    return str(value)
 
 
 EXAMPLE_QUESTIONS = [
@@ -98,6 +141,7 @@ def run_question(question: str) -> None:
         return
 
     st.session_state.messages.append({"role": "user", "content": cleaned_question})
+    persist_current_session_messages()
     with st.chat_message("user"):
         st.write(cleaned_question)
 
@@ -107,6 +151,7 @@ def run_question(question: str) -> None:
         status.update(label="分析完成", state="complete")
         render_answer_state(state, key_prefix=f"live_{len(st.session_state.messages)}")
     st.session_state.messages.append({"role": "assistant", "state": state})
+    persist_current_session_messages()
 
 
 st.set_page_config(page_title="ChatBI 智能问数", layout="wide")
@@ -119,12 +164,10 @@ except Exception as exc:
     st.error(str(exc))
     st.stop()
 
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+session_id = ensure_session_id()
 if "pending_question" not in st.session_state:
     st.session_state.pending_question = None
-if "session_id" not in st.session_state:
-    st.session_state.session_id = uuid.uuid4().hex
+load_current_session_messages(session_id)
 
 with st.sidebar:
     page = st.radio("导航", ["智能问数", "可问范围"], label_visibility="collapsed")
@@ -139,6 +182,8 @@ with st.sidebar:
         if st.button("清空会话", use_container_width=True):
             st.session_state.messages = []
             st.session_state.pending_question = None
+            clear_session_messages(st.session_state.session_id)
+            clear_memory(session_id=st.session_state.session_id)
             st.rerun()
 
 if page == "可问范围":

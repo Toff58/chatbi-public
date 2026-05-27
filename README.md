@@ -2,7 +2,7 @@
 
 ChatBI 是一个基于 Streamlit、SQLite 和 LLM Agent 的自然语言问数应用。用户可以用中文提出 BI 问题，系统会根据本地 App 人群数据生成安全 SQL，执行查询，并返回中文结论、图表和明细表。
 
-公开演示版默认关闭全局 Memory，避免多人访问时互相影响上下文；当前页面内的聊天历史仍由 Streamlit 会话保留。
+公开演示版按 `session_id` 持久化轻量 Memory 和页面会话历史：首次打开页面会自动把 `session_id` 写入 URL，同一 URL 刷新后可以恢复最近问答，不同访客的上下文互不混用。
 
 ## 核心能力
 
@@ -14,6 +14,8 @@ ChatBI 是一个基于 Streamlit、SQLite 和 LLM Agent 的自然语言问数应
 - 可问范围：侧边栏提供字段字典和指标字典，用户可查看可问维度、可用取值和指标口径。
 - 枚举问法：对“有哪些/取值/枚举/可问范围”类问题直接返回维度取值，不改写成人数统计。
 - 结果下载：明细支持 CSV / Excel 下载，图表优先支持 JPG 下载并保留 SVG 回退。
+- Session Memory：按 `session_id` 记录最近问题、SQL、主题和筛选条件，用于公开 demo 的多轮上下文参考。
+- 会话恢复：同一 `session_id` 的页面历史会持久化，刷新或再次打开同一 URL 后可继续查看。
 - 日志观测：本地写入 CSV/JSONL 日志；配置 Supabase 后可同步写入云端日志表。
 
 ## 数据范围
@@ -36,14 +38,14 @@ ChatBI 是一个基于 Streamlit、SQLite 和 LLM Agent 的自然语言问数应
 
 ## Agent Workflow
 
-当前项目保持单 Agent，不强行拆 Planner/Reviewer 等多 Agent；但编排层已经使用显式 LangGraph `StateGraph`，让检索、预检、枚举直答和 SQL Agent 执行成为可见节点。公开演示版默认关闭全局 Memory 写入，页面内聊天历史仍由 Streamlit session 保留。核心流程如下：
+当前项目保持单 Agent，不强行拆 Planner/Reviewer 等多 Agent；但编排层已经使用显式 LangGraph `StateGraph`，让检索、预检、枚举直答和 SQL Agent 执行成为可见节点。核心流程如下：
 
-1. `retrieve_context`：读取表结构、字段枚举、RAG 规则、few-shot 示例和可选轻量 memory。
+1. `retrieve_context`：读取表结构、字段枚举、RAG 规则、few-shot 示例和当前 session 的轻量 memory。
 2. `preflight_guardrails`：判断数据月份范围、不可支持问题、字段枚举问法和未知字段。
 3. 条件路由：枚举/数据边界/失败分支直接返回；正常分析问题进入 `run_sql_agent`。
 4. `run_sql_agent`：LangChain `create_agent` 生成 SQL，并强制调用 `query_app_data`。
 5. `query_app_data`：工具层校验 SQL 安全性、字段枚举、人数口径和结果上限，再查询 SQLite。
-6. `log_interaction`：应用层写入 CSV/JSONL 日志，配置 Supabase 后同步云端日志。
+6. `log_interaction`：应用层写入 CSV/JSONL 日志，SQL Agent 更新当前 session 的轻量 memory；配置 Supabase 后同步云端日志。
 
 ## 技术栈
 
@@ -62,6 +64,7 @@ ChatBI 是一个基于 Streamlit、SQLite 和 LLM Agent 的自然语言问数应
 .
 ├── app.py                         # Streamlit 页面入口，只保留页面流程和会话交互
 ├── main.py                        # 命令行单次问数入口
+├── session_ids.py                 # session_id 规范化，避免文件路径注入
 ├── create_db.py                   # CSV 导入 SQLite 入口
 ├── test_graph.py                  # 本地 smoke test，不依赖模型 API
 ├── config.py                      # 数据库、表名、模型配置
@@ -76,7 +79,7 @@ ChatBI 是一个基于 Streamlit、SQLite 和 LLM Agent 的自然语言问数应
 │   ├── vocabulary.py              # 业务词表、枚举问法和保护关键字
 │   ├── rag.py                     # 轻量 RAG 规则检索
 │   ├── sql_examples.py            # 读取 data/sql_examples.json
-│   ├── memory.py                  # 可选轻量短期 memory
+│   ├── memory.py                  # 按 session_id 隔离的轻量短期 memory
 │   └── prompts/
 │       ├── sql_generation_prompt.md
 │       └── answer_generation_prompt.md
@@ -84,10 +87,11 @@ ChatBI 是一个基于 Streamlit、SQLite 和 LLM Agent 的自然语言问数应
 │   └── executor.py                # SQL 校验、枚举校验、SQLite 查询
 ├── ui/
 │   ├── database.py                # 启动时数据库一致性检查和 CSV 导入
-│   ├── query_logging.py           # 查询日志和调试日志
+│   ├── query_logging.py           # 查询日志、调试日志和可选 Supabase 日志
 │   ├── dataframe.py               # 结果表展示名和中间列过滤
 │   ├── charts.py                  # 图表类型选择和 Altair 渲染
 │   ├── downloads.py               # 下载按钮组织
+│   ├── session_history.py         # 按 session_id 持久化页面会话历史
 │   ├── excel_export.py            # Excel 文件生成
 │   ├── chart_image_export.py      # JPG 图表导出
 │   ├── chart_svg_export.py        # SVG 图表导出
@@ -121,10 +125,18 @@ python create_db.py
 streamlit run app.py
 ```
 
+页面首次打开会自动生成 `session_id` 并写入 URL 查询参数；刷新或再次打开同一 URL 时，会读取同一个 session 的会话历史和轻量 memory。侧边栏“清空会话”会同时清除当前 session 的页面历史和 memory。
+
 命令行单次问数需要配置 `DEEPSEEK_API_KEY`：
 
 ```bash
 python main.py "用户数最多的前 10 个 App 是哪些？"
+```
+
+命令行也可以显式传入 session：
+
+```bash
+python main.py --session-id demo-session "用户数最多的前 10 个 App 是哪些？"
 ```
 
 运行不依赖模型 API 的 smoke test：
@@ -151,19 +163,15 @@ SUPABASE_SERVICE_ROLE_KEY = "your-service-role-key"
 
 不要提交 `.streamlit/secrets.toml`。
 
-公开演示版默认关闭全局 Memory，不生成 `logs/lightweight_memory.json`。如需在开发环境开启：
-
-```bash
-CHATBI_ENABLE_GLOBAL_MEMORY=true
-```
-
-## 日志
+## 日志与 Memory
 
 - 本地查询日志：`logs/query_log.csv`
 - 本地调试日志：`logs/query_debug.jsonl`
+- Session memory：`logs/memory/<session_id>.json`
+- 页面会话历史：`logs/chat_sessions/<session_id>.json`
 - 可选云端日志：Supabase 表 `chatbi_query_logs`
 
-日志会记录用户问题、生成 SQL、工具调用、耗时、结果摘要和最终回答，方便排查 SQL 质量和口径问题。
+查询日志、调试日志和 Supabase 日志都会携带 `session_id`，方便按公开 demo 访客维度复盘问题、生成 SQL、工具调用、耗时、结果摘要和最终回答。
 
 ## 示例问题
 

@@ -1,15 +1,15 @@
 import json
-import os
 import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from config import BASE_DIR
+from session_ids import normalize_session_id
 
 
 MEMORY_PATH = BASE_DIR / "logs" / "lightweight_memory.json"
-GLOBAL_MEMORY_ENV = "CHATBI_ENABLE_GLOBAL_MEMORY"
+SESSION_MEMORY_DIR = BASE_DIR / "logs" / "memory"
 MAX_RECENT_INTERACTIONS = 5
 FILTER_COLUMNS = [
     "app_name",
@@ -24,14 +24,20 @@ FILTER_COLUMNS = [
 ]
 
 
-def global_memory_enabled() -> bool:
-    return os.getenv(GLOBAL_MEMORY_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+def memory_path_for_session(session_id: str) -> Path:
+    return SESSION_MEMORY_DIR / f"{normalize_session_id(session_id)}.json"
 
 
-def load_memory(path: Path = MEMORY_PATH) -> dict[str, Any]:
-    if not global_memory_enabled():
-        return {"recent_interactions": []}
+def resolve_memory_path(path: Path | None = None, *, session_id: str | None = None) -> Path:
+    if path is not None:
+        return path
+    if session_id:
+        return memory_path_for_session(session_id)
+    return MEMORY_PATH
 
+
+def load_memory(path: Path | None = None, *, session_id: str | None = None) -> dict[str, Any]:
+    path = resolve_memory_path(path, session_id=session_id)
     if not path.exists():
         return {"recent_interactions": []}
 
@@ -44,7 +50,10 @@ def load_memory(path: Path = MEMORY_PATH) -> dict[str, Any]:
     interactions = data.get("recent_interactions")
     if not isinstance(interactions, list):
         return {"recent_interactions": []}
-    return {"recent_interactions": interactions[:MAX_RECENT_INTERACTIONS]}
+    return {
+        "session_id": data.get("session_id"),
+        "recent_interactions": interactions[:MAX_RECENT_INTERACTIONS],
+    }
 
 
 def build_memory_context(memory: dict[str, Any]) -> str:
@@ -71,15 +80,15 @@ def update_memory(
     sql: str | None,
     answer: str | None,
     result: list[dict[str, Any]] | None,
-    path: Path = MEMORY_PATH,
+    path: Path | None = None,
+    session_id: str | None = None,
 ) -> None:
-    if not global_memory_enabled():
-        return
-
+    path = resolve_memory_path(path, session_id=session_id)
     memory = load_memory(path)
     interactions = memory.get("recent_interactions") or []
+    now = datetime.now().isoformat(timespec="seconds")
     item = {
-        "time": datetime.now().isoformat(timespec="seconds"),
+        "time": now,
         "question": question,
         "sql": sql or "",
         "topic": infer_topic(question, sql),
@@ -88,13 +97,27 @@ def update_memory(
         "answer_preview": _preview(answer or ""),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as file:
-        json.dump(
-            {"recent_interactions": [item, *interactions][:MAX_RECENT_INTERACTIONS]},
-            file,
-            ensure_ascii=False,
-            indent=2,
-        )
+    payload = {
+        "session_id": normalize_session_id(session_id) if session_id else memory.get("session_id"),
+        "updated_at": now,
+        "recent_interactions": [item, *interactions][:MAX_RECENT_INTERACTIONS],
+    }
+    _write_json(path, payload)
+
+
+def clear_memory(path: Path | None = None, *, session_id: str | None = None) -> None:
+    resolved_path = resolve_memory_path(path, session_id=session_id)
+    try:
+        resolved_path.unlink()
+    except FileNotFoundError:
+        return
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    temporary_path = path.with_name(f"{path.name}.tmp")
+    with temporary_path.open("w", encoding="utf-8") as file:
+        json.dump(payload, file, ensure_ascii=False, indent=2)
+    temporary_path.replace(path)
 
 
 def infer_topic(question: str, sql: str | None) -> str:

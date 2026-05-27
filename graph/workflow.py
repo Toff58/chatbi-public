@@ -7,7 +7,7 @@ from graph.state import ChatBIState
 WORKFLOW_STEPS = [
     {
         "name": "retrieve_context",
-        "description": "读取表结构、业务口径、few-shot 示例、字段枚举和可选轻量 memory。",
+        "description": "读取表结构、业务口径、few-shot 示例、字段枚举和当前 session 的轻量 memory。",
     },
     {
         "name": "preflight_guardrails",
@@ -31,7 +31,7 @@ WORKFLOW_STEPS = [
     },
     {
         "name": "log_interaction",
-        "description": "应用层写入 CSV/JSONL 日志；配置 Supabase 后同步云端日志。",
+        "description": "应用层写入 CSV/JSONL 日志，SQL Agent 更新当前 session 的轻量 memory；配置 Supabase 后同步云端日志。",
     },
 ]
 

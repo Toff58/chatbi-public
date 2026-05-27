@@ -58,11 +58,11 @@
 
 ### Memory 是什么？存在哪里？
 
-Memory 是轻量短期记忆，不是长期用户画像。它记录最近几次问题、SQL、主题和筛选条件，存到 `logs/lightweight_memory.json`。作用是给后续问题提供上下文参考，比如最近问过某个品类、城市或人群。后续可以升级为长期用户偏好记忆或企业知识库记忆。
+Memory 是轻量短期记忆，不是长期用户画像。公开 demo 里会按 `session_id` 隔离保存：页面首次打开会生成 `session_id` 并放到 URL，Agent memory 存到 `logs/memory/<session_id>.json`，页面会话历史存到 `logs/chat_sessions/<session_id>.json`。它记录最近几次问题、SQL、主题和筛选条件，作用是给后续问题提供上下文参考，同时避免不同访客的上下文互相污染。后续可以升级为长期用户偏好记忆或企业知识库记忆。
 
 ### 日志怎么做？
 
-查询日志写入 `logs/query_log.csv`，使用 `utf-8-sig`，避免中文乱码。字段包括时间、用户问题、生成 SQL、是否校验通过、查询结果摘要和最终回答。调试日志写入 `logs/query_debug.jsonl`，包含 RAG 命中、工具调用、模型耗时等更详细信息。
+查询日志写入 `logs/query_log.csv`，使用 `utf-8-sig`，避免中文乱码。字段包括时间、`session_id`、用户问题、生成 SQL、是否校验通过、查询结果摘要和最终回答。调试日志写入 `logs/query_debug.jsonl`，包含 RAG 命中、工具调用、模型耗时等更详细信息。
 
 ### SQL 执行失败怎么办？
 
