@@ -10,51 +10,100 @@ ChatBI 是面向客户使用的智能问数产品。用户用自然语言提出�
 
 ### `app.py`
 
-Streamlit 前端入口。
+Streamlit 前端入口，现在只保留页面流程和聊天交互。
 
 职责：
 - 渲染问数工作台、会话历史、示例问题和 `st.chat_input()` 输入。
 - 展示查询进度、结论、图表/明细 tabs、耗时和返回行数。
-- 根据结果形态自动选择图表：单值结果不画图，排行默认条形图，占比结果可用环图，多指标小结果可用分组柱状图，跨月结果预留折线图。
-- 结果支持下载 CSV 和 Excel；如果本次生成图表，同时支持下载 JPG 图，环境不支持 JPG 时回退 SVG。
+- 调用 `ui.database.ensure_database()` 做数据库一致性检查。
+- 调用 `graph.workflow.build_graph()` 发起问数。
+- 调用 `ui.*` 模块完成日志、表格、图表、下载和可问范围展示。
 - 不展示 SQL、RAG、验收指标、分子、分母、rebase 过程等调试或计算过程。
-- 写入查询日志 `query_log.csv` 和调试日志 `query_debug.jsonl`。
-- 启动时检查 SQLite 是否与 CSV 行数和导入元数据一致；不一致时自动覆盖导入 CSV。
-- 图表使用 Altair 显式指定 x 轴排序，确保柱状图按指标降序从左到右展示。
-- 表格和图表会过滤常见中间计算列，避免前端暴露宏观人数估算过程。
-- 图表标题、tooltip、图例、明细表和下载文件会把底层字段名转换为业务展示名，例如 `user_count` 展示为“用户数”。
-- 侧边栏新增“可问范围”页面，提供指标字典和字段字典，展示可问维度、可用取值和指标口径。
 
 调试策略：
 - 完整调试信息始终写入 `query_debug.jsonl`，便于开发复盘。
 - 客户前端不提供调试信息开关。
 
-### `graph/workflow.py`
+### `ui/`
 
-对外保留原来的 `build_graph()` 入口。
+Streamlit 应用层辅助模块。
 
 职责：
-- 返回 ChatBI Agent 应用。
+- `ui/database.py`：启动时检查 SQLite 与 CSV 是否一致，不一致则自动导入。
+- `ui/query_logging.py`：写入查询日志 `query_log.csv` 和调试日志 `query_debug.jsonl`；配置 Supabase 后同步云端日志。
+- `ui/dataframe.py`：过滤中间计算列，将底层字段名转换为业务展示名。
+- `ui/charts.py`：根据结果形态选择条形图、环图、分组柱状图或折线图，并渲染 Altair 图表。
+- `ui/downloads.py`：渲染 CSV、Excel、图表下载按钮。
+- `ui/excel_export.py`：生成 Excel 文件。
+- `ui/chart_image_export.py`：生成 JPG 图表。
+- `ui/chart_svg_export.py`：生成 SVG 图表。
+- `ui/chart_export_utils.py`：复用图表导出格式化工具。
+- `ui/dictionary.py`：渲染“可问范围”页面，包括指标字典和字段字典。
+
+### `graph/workflow.py`
+
+对外保留原来的 `build_graph()` 入口，并显式构建 LangGraph `StateGraph`。
+
+职责：
+- 注册 `retrieve_context`、`preflight_guardrails`、`respond_informational`、`respond_enum_lookup`、`respond_failure`、`run_sql_agent` 等节点。
+- 通过条件边把预检结果路由到枚举直答、数据边界说明、失败响应或 SQL Agent 执行。
+- 返回 `CompiledStateGraph`，调用方仍然只需要 `.invoke(state)`。
 - 保持 `app.py`、测试脚本等调用方不需要知道内部实现细节。
+
+### `graph/nodes.py`
+
+LangGraph 节点适配层。
+
+职责：
+- 将 `ChatBIAgentApp` 的运行时方法包装成 LangGraph 节点函数。
+- 提供 `route_after_preflight()` 条件路由函数。
+- 让节点和边可以通过 `build_graph().nodes` 直接被观察和测试。
 
 ### `graph/agent.py`
 
-LangChain Agent 主逻辑。
+Agent 运行时。
 
 职责：
-- 使用 `langchain.agents.create_agent` 构建底层 LangGraph Agent。
-- 定义 `query_app_data` 工具供模型调用。
+- 使用 `langchain.agents.create_agent` 构建 SQL 分析 Agent。
 - 注入 RAG 上下文和固定业务范围映射。
-- 在模型调用前拦截 `device_brand` 这类不在表结构中的字段，避免生成假成功空结果。
 - 解析最后一次工具调用的 SQL，避免展示 SQL 与最终答案不一致。
 - 记录模型调用、SQL 工具、RAG 检索、业务口径说明和验收指标。
-- 单个 App 或按 `app_name` 排行的画像人群总用户数直接 `SUM(ppl_cnt)`。
-- 固定 base 人数为 6 亿，任何返回给前端的人数都不能超过 6 亿。
-- 当前数据只包含 `2025-07` 一个月；用户查询其他月份或趋势、环比、同比时，Agent 会在调用模型前直接说明数据限制，不生成跨月 SQL。
-- 用户询问“有哪些/取值/枚举/穷举/可问范围”等字段取值类问题时，Agent 会在调用模型前直接返回对应维度枚举，不改写成人数统计或排行。
-- 省份、城市等级、性别、年龄、收入等宏观人群人数先算有效样本占比，再用 base 乘以占比估算。
-- 工具层会阻断 SQL 里对 `ppl_cnt` 的二次放大表达式，避免结果被重复换算。
-- 工具层会阻断直接输出宏观 `SUM(ppl_cnt)`、超过 base 的人数结果和中间计算列。
+- 把上下文检索、预检、分支响应和 SQL Agent 执行拆成可由 `graph/nodes.py` 调用的方法。
+
+### `graph/preflight.py`
+
+模型调用前的业务预检。
+
+职责：
+- 当前数据只包含 `2025-07` 一个月；用户查询其他月份或趋势、环比、同比时，直接说明数据限制，不生成跨月 SQL。
+- 用户询问“有哪些/取值/枚举/穷举/可问范围”等字段取值类问题时，直接返回对应维度枚举，不改写成人数统计或排行。
+- 拦截交叉 App 重合、用户级去重、使用时长、留存、订单、因果/相关性等当前聚合表无法支持的问题。
+- 拦截 `device_brand` 这类不在表结构中的字段，避免生成假成功空结果。
+
+### `graph/sql_tool.py`
+
+LangChain 工具和 SQL 结果保护。
+
+职责：
+- 定义唯一数据查询工具 `query_app_data`。
+- 校验 SQL 只读、字段枚举、危险关键字和人数口径。
+- 阻断 SQL 里对 `ppl_cnt` 的二次放大表达式，避免结果被重复换算。
+- 阻断直接输出宏观 `SUM(ppl_cnt)`、超过 base 的人数结果和中间计算列。
+
+### `graph/vocabulary.py`
+
+业务词表和保护关键字集合。
+
+职责：
+- 集中维护枚举问法、不可支持问题关键词、App 别名、趋势词和中间计算列名。
+- 避免 `agent.py` 被大量常量撑大。
+
+### `graph/result_summary.py`
+
+本地兜底总结。
+
+职责：
+- 在模型没有最终回答时提供最小兜底结论。
 
 ### `graph/rag.py`
 
@@ -93,14 +142,6 @@ LangChain Agent 主逻辑。
 职责：
 - 记录 `accuracy`、`precision`、`recall`、`sql_valid`、`execution_success`、`tool_called`、`result_count`、`latency_ms`。
 - 指标用于开发验收和回归观察，不直接面向客户展示。
-
-### `graph/nodes.py`
-
-本地兜底总结。
-
-职责：
-- 当前 LangChain Agent 主流程不再使用旧节点流水线。
-- 只保留 `build_local_summary()`，在模型没有最终回答时提供最小兜底结论。
 
 ### `deepseek_langchain.py`
 
@@ -174,12 +215,14 @@ SQLite 查询执行层。
 
 1. 用户在 `app.py` 输入问题。
 2. `app.py` 调用 `graph.workflow.build_graph()`。
-3. `build_graph()` 返回 `ChatBIAgentApp`。
-4. `ChatBIAgentApp` 检索 RAG 规则和固定业务词映射。
-5. Agent 生成 SQL 并调用 `query_app_data` 工具。
-6. 工具校验 SQL，执行 SQLite 查询，并阻断超过 6 亿的人数结果、宏观直接求和和中间计算列。
-7. Agent 根据工具结果生成中文结论。
-8. `app.py` 展示结论、图表和明细，并写入日志。
+3. `build_graph()` 返回 LangGraph `CompiledStateGraph`。
+4. `retrieve_context` 节点检索 schema、字段枚举、RAG 规则、few-shot 示例、业务词映射和可选轻量 memory。
+5. `preflight_guardrails` 节点判断数据范围、不可支持问题、字段枚举问法和未知字段。
+6. 条件边把请求路由到 `respond_informational`、`respond_enum_lookup`、`respond_failure` 或 `run_sql_agent`。
+7. `run_sql_agent` 使用 LangChain `create_agent` 生成 SQL，并强制调用 `query_app_data`。
+8. `query_app_data` 工具校验 SQL，执行 SQLite 查询，并阻断超过 6 亿的人数结果、宏观直接求和和中间计算列。
+9. Agent 根据工具结果生成中文结论。
+10. `app.py` 通过 `ui.*` 模块展示结论、图表和明细，并写入日志。
 
 ## 文档维护规则
 
@@ -498,3 +541,29 @@ Conventional Commit summary:
 
 Conventional Commit summary:
 - `feat(app): add business labels and query scope dictionary`
+
+### 2026-05-28 代码结构与 LangGraph 节点重构
+
+需求识别：
+- `app.py` 和 `graph/agent.py` 承担职责过多，不利于维护，也不利于面试时解释项目边界。
+- `graph/nodes.py` 只剩兜底函数，虽然 `create_agent` 底层依赖 LangGraph，但项目层没有显式体现 LangGraph 的 state、node、edge 优势。
+- MCP 更适合接外部工具和资源服务；当前本地 SQLite 问数场景没有必要为了“看起来高级”强行引入 MCP，否则会增加部署和面试解释成本。
+
+改动结果：
+- `app.py` 从千行级入口拆成 128 行页面编排；数据库、日志、表格、图表、下载和字段字典分别迁移到 `ui/` 模块。
+- `ui/downloads.py` 继续拆分 Excel、JPG、SVG 导出模块，避免把导出细节重新堆成一个大文件。
+- `graph/workflow.py` 改为显式构建 LangGraph `StateGraph`，包含 `retrieve_context`、`preflight_guardrails`、`respond_informational`、`respond_enum_lookup`、`respond_failure`、`run_sql_agent` 节点和条件边。
+- `graph/nodes.py` 改为 LangGraph 节点适配层，`build_graph().nodes` 可以直接看到项目级节点。
+- `graph/agent.py` 聚焦 Agent 运行时：构造 prompt、调用模型、解析工具调用、汇总指标和 debug 信息。
+- 新增 `graph/preflight.py`，集中处理数据月份范围、不可支持问题、字段枚举直答和未知字段预检。
+- 新增 `graph/sql_tool.py`，集中维护 `query_app_data` 工具和 SQL/结果保护。
+- 新增 `graph/vocabulary.py` 和 `graph/result_summary.py`，把业务词表和兜底总结从主流程中拆出。
+
+验证：
+- 执行 `.\.venv\Scripts\python.exe -m compileall -q app.py main.py graph ui sql data tests` 通过。
+- 执行 `.\.venv\Scripts\python.exe test_graph.py` 通过。
+- 轻量验证“有哪些城市等级可以问？”命中 `enum_lookup` 分支，模型调用次数为 0。
+- 轻量验证“最近几个月用户数趋势如何？”命中 `informational` 分支，不生成跨月 SQL。
+
+Conventional Commit summary:
+- `refactor(graph): expose langgraph nodes and split ui modules`

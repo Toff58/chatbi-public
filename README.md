@@ -36,12 +36,14 @@ ChatBI 是一个基于 Streamlit、SQLite 和 LLM Agent 的自然语言问数应
 
 ## Agent Workflow
 
-1. `retrieve_context`：读取表结构、字段枚举、RAG 规则和 few-shot 示例。
-2. `generate_sql`：LLM 根据问题和上下文生成只读 SQL。
-3. `validate_sql`：工具层校验 SQL 安全性、字段枚举、人数口径和结果上限。
-4. `execute_sql`：调用 `query_app_data` 查询 SQLite。
-5. `generate_answer`：根据查询结果生成简洁中文结论。
-6. `log_interaction`：应用层写入本地或云端日志，便于调试和复盘。
+当前项目保持单 Agent，不强行拆 Planner/Reviewer 等多 Agent；但编排层已经使用显式 LangGraph `StateGraph`，让检索、预检、枚举直答和 SQL Agent 执行成为可见节点。公开演示版默认关闭全局 Memory 写入，页面内聊天历史仍由 Streamlit session 保留。核心流程如下：
+
+1. `retrieve_context`：读取表结构、字段枚举、RAG 规则、few-shot 示例和可选轻量 memory。
+2. `preflight_guardrails`：判断数据月份范围、不可支持问题、字段枚举问法和未知字段。
+3. 条件路由：枚举/数据边界/失败分支直接返回；正常分析问题进入 `run_sql_agent`。
+4. `run_sql_agent`：LangChain `create_agent` 生成 SQL，并强制调用 `query_app_data`。
+5. `query_app_data`：工具层校验 SQL 安全性、字段枚举、人数口径和结果上限，再查询 SQLite。
+6. `log_interaction`：应用层写入 CSV/JSONL 日志，配置 Supabase 后同步云端日志。
 
 ## 技术栈
 
@@ -50,6 +52,7 @@ ChatBI 是一个基于 Streamlit、SQLite 和 LLM Agent 的自然语言问数应
 - SQLite
 - Pandas / Altair
 - LangChain Agent
+- LangGraph StateGraph
 - DeepSeek Chat API
 - 本地 JSON RAG / few-shot 示例库
 
@@ -57,7 +60,7 @@ ChatBI 是一个基于 Streamlit、SQLite 和 LLM Agent 的自然语言问数应
 
 ```text
 .
-├── app.py                         # Streamlit ChatBI 前端
+├── app.py                         # Streamlit 页面入口，只保留页面流程和会话交互
 ├── main.py                        # 命令行单次问数入口
 ├── create_db.py                   # CSV 导入 SQLite 入口
 ├── test_graph.py                  # 本地 smoke test，不依赖模型 API
@@ -65,8 +68,12 @@ ChatBI 是一个基于 Streamlit、SQLite 和 LLM Agent 的自然语言问数应
 ├── deepseek_client.py             # SQL prompt 构造
 ├── deepseek_langchain.py          # DeepSeek LangChain ChatModel 适配
 ├── graph/
-│   ├── agent.py                   # Agent 主流程与 query_app_data 工具
-│   ├── workflow.py                # Workflow steps 和 build_graph 入口
+│   ├── workflow.py                # LangGraph StateGraph 和 build_graph 入口
+│   ├── nodes.py                   # LangGraph 节点适配层
+│   ├── agent.py                   # Agent 运行时：prompt、模型调用、结果解析
+│   ├── preflight.py               # 数据范围、枚举问法、未知字段等预检规则
+│   ├── sql_tool.py                # query_app_data 工具和 SQL/结果保护
+│   ├── vocabulary.py              # 业务词表、枚举问法和保护关键字
 │   ├── rag.py                     # 轻量 RAG 规则检索
 │   ├── sql_examples.py            # 读取 data/sql_examples.json
 │   ├── memory.py                  # 可选轻量短期 memory
@@ -75,6 +82,16 @@ ChatBI 是一个基于 Streamlit、SQLite 和 LLM Agent 的自然语言问数应
 │       └── answer_generation_prompt.md
 ├── sql/
 │   └── executor.py                # SQL 校验、枚举校验、SQLite 查询
+├── ui/
+│   ├── database.py                # 启动时数据库一致性检查和 CSV 导入
+│   ├── query_logging.py           # 查询日志和调试日志
+│   ├── dataframe.py               # 结果表展示名和中间列过滤
+│   ├── charts.py                  # 图表类型选择和 Altair 渲染
+│   ├── downloads.py               # 下载按钮组织
+│   ├── excel_export.py            # Excel 文件生成
+│   ├── chart_image_export.py      # JPG 图表导出
+│   ├── chart_svg_export.py        # SVG 图表导出
+│   └── dictionary.py              # 可问范围页面
 ├── data/
 │   ├── app_data.csv               # 演示数据
 │   ├── import_csv_to_db.py        # CSV 导入脚本
