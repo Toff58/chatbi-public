@@ -82,6 +82,10 @@ def save_supabase_log(question: str, state: dict[str, Any]) -> None:
         return
 
     metrics = state.get("metrics") or {}
+    debug_info = state.get("debug_info") or {}
+    context_usage = debug_info.get("context_usage") or {}
+    question_cache = debug_info.get("question_cache") or {}
+    timings = state.get("timings") or {}
     payload = {
         "session_id": state.get("session_id") or "",
         "question": question,
@@ -99,6 +103,10 @@ def save_supabase_log(question: str, state: dict[str, Any]) -> None:
         "result_count": _optional_int(metrics.get("result_count")),
         "rag_context_count": _optional_int(metrics.get("rag_context_count")),
         "latency_ms": _optional_int(metrics.get("latency_ms")),
+        "question_cache_hit": _optional_bool(context_usage.get("question_cache_hit")),
+        "question_cache_entry_id": context_usage.get("question_cache_entry_id") or question_cache.get("entry_id") or "",
+        "model_call_count": _optional_int(timings.get("model_call_count")),
+        "question_cache_result_reused": _optional_bool(question_cache.get("result_reused")),
         "app_version": APP_VERSION,
         "data_window": DATA_WINDOW,
     }

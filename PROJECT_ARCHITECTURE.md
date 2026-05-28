@@ -33,7 +33,7 @@ Streamlit 应用层辅助模块。
 
 职责：
 - `ui/database.py`：启动时检查 SQLite 与 CSV 是否一致，不一致则自动导入。
-- `ui/query_logging.py`：写入查询日志 `query_log.csv` 和调试日志 `query_debug.jsonl`。
+- `ui/query_logging.py`：写入查询日志 `query_log.csv` 和调试日志 `query_debug.jsonl`；配置 Supabase 后，同步查询摘要到 `chatbi_query_logs`，包括缓存命中字段 `question_cache_hit`、`question_cache_entry_id`、`model_call_count` 和 `question_cache_result_reused`。
 - `ui/dataframe.py`：过滤中间计算列，将底层字段名转换为业务展示名。
 - `ui/charts.py`：根据结果形态选择条形图、环图、分组柱状图或折线图，并渲染 Altair 图表。
 - `ui/downloads.py`：渲染 CSV、Excel、图表下载按钮。
@@ -705,3 +705,21 @@ Conventional Commit summary:
 
 Conventional Commit summary:
 - `feat(cache): add frequent question cache for examples`
+
+### 2026-05-28 Supabase 缓存命中日志
+
+需求识别：
+- public 项目需要在 Supabase 里直接判断一次查询是否走了高频问题缓存。
+- 本地调试日志已有 `debug_info.question_cache` 和 `context_usage.question_cache_hit`，但原 Supabase payload 没有同步这些字段。
+
+改动结果：
+- `ui/query_logging.py` 的 `save_supabase_log()` 新增 `question_cache_hit`、`question_cache_entry_id`、`model_call_count` 和 `question_cache_result_reused`。
+- 字段来源分别为 `debug_info.context_usage`、`debug_info.question_cache` 和 `state.timings`。
+- README 补充 Supabase 侧缓存命中字段说明。
+
+验证：
+- 执行 `python -m py_compile ui/query_logging.py` 通过。
+- 使用 monkeypatch 方式验证 Supabase payload 会包含新增缓存字段。
+
+Conventional Commit summary:
+- `feat(logging): sync question cache fields to supabase`

@@ -214,6 +214,8 @@ LIMIT 10;
 
 当前先把侧边栏示例问题加入缓存。命中缓存时系统会在追问补全后直接执行缓存 SQL，不再调用模型生成 SQL；执行结果会写入调试日志的 `question_cache` 和 `context_usage.question_cache_hit`，便于复盘命中情况。
 
+如果配置了 Supabase 日志同步，`chatbi_query_logs` 也会写入 `question_cache_hit`、`question_cache_entry_id`、`model_call_count` 和 `question_cache_result_reused`，可以直接在云端筛选缓存命中记录。
+
 Memory 只记录当前 session 最近几次交互的问题、SQL、主题和筛选条件，用于短期上下文参考。公开 demo 中不同访客的上下文不会混在同一个 memory 文件里；面试时可以解释为“按 session 隔离的轻量上下文记忆”，后续可升级为用户偏好记忆或企业知识库记忆。
 
 ## 面试展示重点
@@ -252,3 +254,6 @@ Conventional Commit summary:
 
 Conventional Commit summary:
 - `feat(cache): add frequent question cache for examples`
+
+Conventional Commit summary:
+- `feat(logging): sync question cache fields to supabase`
