@@ -4,7 +4,12 @@ from typing import Any
 
 import pandas as pd
 
-from ui.constants import DISPLAY_COLUMN_LABELS, DISPLAY_TOKEN_LABELS, HIDDEN_DISPLAY_COLUMN_FRAGMENTS
+from ui.constants import (
+    DISPLAY_COLUMN_LABELS,
+    DISPLAY_TOKEN_LABELS,
+    HIDDEN_DISPLAY_COLUMN_FRAGMENTS,
+    RATIO_COLUMN_FRAGMENTS,
+)
 
 
 def build_sorted_dataframe(rows: list[dict[str, Any]]) -> pd.DataFrame:
@@ -81,6 +86,10 @@ def _is_user_count_column(column: Any) -> bool:
     if "用户" in str(column) and any(fragment in str(column) for fragment in {"数", "人数", "规模"}):
         return True
     return "user" in lowered and any(fragment in lowered for fragment in {"count", "cnt", "number"})
+
+def _is_ratio_column(column: Any) -> bool:
+    lowered = str(column).lower()
+    return any(fragment in lowered for fragment in RATIO_COLUMN_FRAGMENTS)
 
 def _is_hidden_display_column(column: str) -> bool:
     lowered = column.lower()

@@ -5,11 +5,12 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from ui.constants import MONTH_COLUMN_NAMES, RATIO_COLUMN_FRAGMENTS
+from ui.constants import MONTH_COLUMN_NAMES
 from ui.dataframe import (
     _chart_metric_label,
     _display_column_label,
     _display_label_map,
+    _is_ratio_column,
     _is_user_count_column,
     build_sorted_dataframe,
 )
@@ -145,10 +146,6 @@ def _should_render_pie(df: pd.DataFrame, y_column: str) -> bool:
         return False
     total = float(values.sum())
     return 0 < total <= 101
-
-def _is_ratio_column(column: str) -> bool:
-    lowered = str(column).lower()
-    return any(fragment in lowered for fragment in RATIO_COLUMN_FRAGMENTS)
 
 def render_chart(chart_spec: dict[str, Any]) -> None:
     chart = build_altair_chart(chart_spec)
