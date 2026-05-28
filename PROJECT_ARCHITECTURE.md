@@ -625,3 +625,27 @@ Conventional Commit summary:
 
 Conventional Commit summary:
 - `feat(memory): persist demo memory by session id`
+
+### 2026-05-28 连续追问补全
+
+需求识别：
+- 用户在连续问数时会自然省略前文，例如先问“广东省高收入人群的性别比例”，再问“湖南省呢？”。
+- 原链路虽然有 session memory，但只是把历史注入 prompt，没有在预检和 SQL 生成前把省略问句补全。
+- 如果直接把“湖南省呢？”当独立问题检索和生成 SQL，模型容易丢失“高收入人群”和“性别比例”两个关键槽位。
+
+改动结果：
+- 新增 `graph/followup.py`，基于字段枚举、上一轮 `filters` 和上一轮问题做确定性槽位替换。
+- LangGraph 新增 `resolve_followup_question` 节点，位于 `retrieve_context` 和 `preflight_guardrails` 之间。
+- `retrieve_context` 先读取当前 session memory；`resolve_followup_question` 将追问补全后，再按补全后的问题重新检索 RAG、业务口径和 SQL examples。
+- 后续 `preflight_guardrails`、`run_sql_agent`、memory 更新和评测指标都使用补全后的问题；前端日志仍保留用户原始输入。
+- `debug_info` 增加 `original_question`、`resolved_question` 和 `followup_resolution`，便于复盘追问是否被补全。
+- 新增 `tests/test_followup.py`，覆盖“湖南省呢？”补全为“湖南省高收入人群的性别比例”、多槽位追问替换，以及独立完整问题不被误补全。
+
+验证：
+- 执行 `python -m py_compile graph\followup.py graph\state.py graph\agent.py graph\nodes.py graph\workflow.py` 通过。
+- 当前环境没有安装 `pytest`，未运行 `python -m pytest`。
+- 执行轻量函数测试：`python -c "from tests.test_followup import test_resolves_province_followup_from_previous_question, test_keeps_standalone_question_unchanged, test_resolves_multiple_followup_slots; test_resolves_province_followup_from_previous_question(); test_keeps_standalone_question_unchanged(); test_resolves_multiple_followup_slots(); print('followup tests passed')"` 通过。
+- 执行 `python -m compileall -q app.py main.py graph ui sql data tests test_graph.py` 通过。
+
+Conventional Commit summary:
+- `feat(agent): resolve contextual follow-up questions`

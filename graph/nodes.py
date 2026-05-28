@@ -16,6 +16,9 @@ class ChatBIWorkflowNodes:
     def retrieve_context(self, state: ChatBIState) -> dict:
         return self.runtime.retrieve_context(state)
 
+    def resolve_followup_question(self, state: ChatBIState) -> dict:
+        return self.runtime.resolve_followup_question(state)
+
     def preflight_guardrails(self, state: ChatBIState) -> dict:
         return self.runtime.preflight_guardrails(state)
 

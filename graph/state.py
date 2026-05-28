@@ -2,8 +2,9 @@ from typing import Any, TypedDict
 
 
 class ChatBIState(TypedDict, total=False):
-    question: str
     session_id: str | None
+    original_question: str
+    question: str
     sql: str | None
     sql_valid: bool
     summary: str | None
@@ -16,7 +17,9 @@ class ChatBIState(TypedDict, total=False):
     timings: dict[str, Any] | None
     debug_info: dict[str, Any] | None
     _started_at: float
+    _memory: dict[str, Any]
     _memory_context: str
+    _followup_resolution: dict[str, Any]
     _matched_scopes: list[dict[str, Any]]
     _sql_examples: list[dict[str, Any]]
     _context_usage: dict[str, Any]

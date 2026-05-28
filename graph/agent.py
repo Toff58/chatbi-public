@@ -12,6 +12,7 @@ from deepseek_client import DeepSeekError, build_sql_prompt
 from deepseek_langchain import ChatDeepSeek, get_model_call_timings, reset_model_call_timings
 from graph.business_terms import build_scope_clarifications, format_scope_context, match_business_scopes
 from graph.evaluation import evaluate_run
+from graph.followup import resolve_followup_question
 from graph.memory import build_memory_context, load_memory, update_memory
 from graph.preflight import QuestionPreflight
 from graph.result_summary import build_local_summary
@@ -56,7 +57,8 @@ class ChatBIAgentApp:
     def invoke(self, state: ChatBIState) -> ChatBIState:
         """Compatibility entry point for callers that do not need graph metadata."""
         prepared_state = {**state, **self.retrieve_context(state)}
-        routed_state = {**prepared_state, **self.preflight_guardrails(prepared_state)}
+        resolved_state = {**prepared_state, **self.resolve_followup_question(prepared_state)}
+        routed_state = {**resolved_state, **self.preflight_guardrails(resolved_state)}
         route = routed_state.get("_route") or "run_agent"
         if route == "informational":
             return self.respond_informational(routed_state)
@@ -68,22 +70,44 @@ class ChatBIAgentApp:
 
     def retrieve_context(self, state: ChatBIState) -> dict[str, Any]:
         started_at = time.perf_counter()
-        question = state["question"]
         session_id = state.get("session_id")
         memory = load_memory(session_id=session_id)
         memory_context = build_memory_context(memory)
-        matched_scopes = match_business_scopes(question)
-        rag_items = retrieve_sql_context(question, self.schema_profile)
-        sql_examples = retrieve_sql_examples(question)
+        retrieval_ms = int((time.perf_counter() - started_at) * 1000)
+        return {
+            "original_question": state.get("original_question") or state["question"],
+            "_started_at": started_at,
+            "_memory": memory,
+            "_memory_context": memory_context,
+            "_retrieval_ms": retrieval_ms,
+        }
+
+    def resolve_followup_question(self, state: ChatBIState) -> dict[str, Any]:
+        started_at = float(state.get("_started_at") or time.perf_counter())
+        question = state["question"]
+        session_id = state.get("session_id")
+        memory = state.get("_memory") or load_memory(session_id=session_id)
+        memory_context = state.get("_memory_context") or build_memory_context(memory)
+        resolution = resolve_followup_question(question, memory, self.schema_profile)
+        resolved_question = str(resolution.get("resolved_question") or question)
+        matched_scopes = match_business_scopes(resolved_question)
+        rag_items = retrieve_sql_context(resolved_question, self.schema_profile)
+        sql_examples = retrieve_sql_examples(resolved_question)
         context_usage = self._build_context_usage(rag_items, matched_scopes, sql_examples)
         context_usage["memory_session_id"] = session_id or "default"
         context_usage["memory_applied"] = bool(memory.get("recent_interactions"))
         context_usage["memory_item_count"] = len(memory.get("recent_interactions") or [])
+        context_usage["followup_resolved"] = bool(resolution.get("is_followup"))
+        context_usage["original_question"] = question
+        context_usage["resolved_question"] = resolved_question
+        context_usage["followup_reason"] = resolution.get("reason")
         retrieval_ms = int((time.perf_counter() - started_at) * 1000)
         return {
+            "question": resolved_question,
+            "original_question": state.get("original_question") or question,
             "rag_context": rag_items,
-            "_started_at": started_at,
             "_memory_context": memory_context,
+            "_followup_resolution": resolution,
             "_matched_scopes": matched_scopes,
             "_sql_examples": sql_examples,
             "_context_usage": context_usage,
@@ -235,6 +259,9 @@ class ChatBIAgentApp:
                     "matched_scopes": matched_scopes,
                     "sql_examples": sql_examples,
                     "memory_context": memory_context,
+                    "original_question": state.get("original_question"),
+                    "resolved_question": state.get("question"),
+                    "followup_resolution": state.get("_followup_resolution"),
                     "session_id": state.get("session_id"),
                     "context_usage": context_usage,
                     "data_window": self.preflight.available_months(),
@@ -338,6 +365,9 @@ class ChatBIAgentApp:
                 "rag_context": rag_items,
                 "matched_scopes": matched_scopes,
                 "sql_examples": sql_examples,
+                "original_question": state.get("original_question"),
+                "resolved_question": state.get("question"),
+                "followup_resolution": state.get("_followup_resolution"),
                 "session_id": state.get("session_id"),
                 "context_usage": context_usage,
                 "data_issue": data_issue,
@@ -402,6 +432,9 @@ class ChatBIAgentApp:
                 "rag_context": rag_items,
                 "matched_scopes": matched_scopes,
                 "sql_examples": sql_examples,
+                "original_question": state.get("original_question"),
+                "resolved_question": state.get("question"),
+                "followup_resolution": state.get("_followup_resolution"),
                 "session_id": state.get("session_id"),
                 "context_usage": context_usage,
                 "data_window": self.preflight.available_months(),
@@ -465,6 +498,9 @@ class ChatBIAgentApp:
                 "rag_context": rag_items,
                 "matched_scopes": matched_scopes,
                 "sql_examples": sql_examples,
+                "original_question": state.get("original_question"),
+                "resolved_question": state.get("question"),
+                "followup_resolution": state.get("_followup_resolution"),
                 "session_id": state.get("session_id"),
                 "context_usage": context_usage,
                 "enum_lookup": enum_lookup,

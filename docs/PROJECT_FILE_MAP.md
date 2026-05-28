@@ -7,7 +7,7 @@
 1. `PROJECT_ARCHITECTURE.md`：项目主文档和变更记录。
 2. `app.py`：Streamlit 页面流程和聊天交互。
 3. `graph/workflow.py`、`graph/nodes.py`：LangGraph StateGraph、节点和条件边。
-4. `graph/agent.py`、`graph/preflight.py`、`graph/sql_tool.py`：Agent 运行时、预检规则和 SQL 工具。
+4. `graph/agent.py`、`graph/followup.py`、`graph/preflight.py`、`graph/sql_tool.py`：Agent 运行时、追问补全、预检规则和 SQL 工具。
 5. `ui/`：数据库准备、日志、表格、图表、下载和字段字典。
 6. `deepseek_langchain.py`：DeepSeek 与 LangChain ChatModel 的适配层。
 7. `sql/executor.py`：SQLite 只读执行与 SQL 安全校验。
@@ -49,6 +49,7 @@
 | `graph/nodes.py` | LangGraph 节点适配层 | 包装 Agent 运行时方法，并提供 `route_after_preflight()`。 |
 | `graph/state.py` | 状态结构 | 定义问题、SQL、结果、指标、clarifications、timings、debug_info 和图内部路由字段。 |
 | `graph/agent.py` | Agent 运行时 | 检索上下文、构造 prompt、调用 DeepSeek、解析工具调用、记录耗时和 debug 信息。 |
+| `graph/followup.py` | 追问补全规则 | 基于当前 session memory、上一轮 SQL filters 和字段枚举，将“湖南省呢？”这类省略追问补全为完整问题。 |
 | `graph/preflight.py` | 模型前预检规则 | 处理数据月份范围、枚举直答、不可支持问题和未知字段。 |
 | `graph/sql_tool.py` | SQL 查询工具 | 定义 `query_app_data`，集中处理 SQL 安全、枚举、人数口径和结果保护。 |
 | `graph/vocabulary.py` | 业务词表 | 集中维护枚举问法、趋势词、不可支持关键词、App 别名和内部列名。 |
@@ -84,6 +85,7 @@
 | 路径 | 作用 | 备注 |
 | --- | --- | --- |
 | `tests/test_cases.py` | 12 条正式回归样例 | 覆盖排行、画像筛选、宏观人数、安全 SQL、非法枚举和不存在字段。 |
+| `tests/test_followup.py` | 追问补全轻量测试 | 不依赖模型 API，验证省份替换追问和独立问题不误补全。 |
 | `tests/run_agent_tests.py` | 回归测试入口 | 写入 latest CSV 和时间戳 CSV，包含模型、工具、SQL 执行等分段耗时。 |
 | `tests/run_generated_question_tests.py` | 批量生成问题测试脚本 | 当前为未跟踪文件；用于更大范围探索测试。 |
 | `logs/agent_test_results.csv` | 最新 12 条回归结果 | 本次最终结果为 12/12 通过。 |

@@ -7,7 +7,11 @@ from graph.state import ChatBIState
 WORKFLOW_STEPS = [
     {
         "name": "retrieve_context",
-        "description": "读取表结构、业务口径、few-shot 示例、字段枚举和当前 session 的轻量 memory。",
+        "description": "读取当前 session 的轻量 memory，并保留原始问题。",
+    },
+    {
+        "name": "resolve_followup_question",
+        "description": "识别省略追问，基于上一轮问题和 SQL filters 补全为完整问数问题。",
     },
     {
         "name": "preflight_guardrails",
@@ -44,6 +48,7 @@ def build_graph():
     nodes = ChatBIWorkflowNodes()
     workflow = StateGraph(ChatBIState)
     workflow.add_node("retrieve_context", nodes.retrieve_context)
+    workflow.add_node("resolve_followup_question", nodes.resolve_followup_question)
     workflow.add_node("preflight_guardrails", nodes.preflight_guardrails)
     workflow.add_node("respond_informational", nodes.respond_informational)
     workflow.add_node("respond_enum_lookup", nodes.respond_enum_lookup)
@@ -51,7 +56,8 @@ def build_graph():
     workflow.add_node("run_sql_agent", nodes.run_sql_agent)
 
     workflow.add_edge(START, "retrieve_context")
-    workflow.add_edge("retrieve_context", "preflight_guardrails")
+    workflow.add_edge("retrieve_context", "resolve_followup_question")
+    workflow.add_edge("resolve_followup_question", "preflight_guardrails")
     workflow.add_conditional_edges(
         "preflight_guardrails",
         route_after_preflight,
