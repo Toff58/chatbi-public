@@ -3,7 +3,7 @@
     "id": "cache_overall_app_top",
     "question": "用户数最多的前 10 个 App 是哪些？",
     "sql": "SELECT app_name, SUM(ppl_cnt) AS user_count\nFROM {table_name}\nGROUP BY app_name\nORDER BY user_count DESC\nLIMIT 10;",
-    "answer": "已命中高频问题缓存，返回用户数最多的前 10 个 App。"
+    "answer": "用户数最多的前 10 个 App 如下。"
   },
   {
     "id": "cache_young_female_leisure_top",
@@ -12,24 +12,24 @@
       "年轻女性在娱乐休闲里用得最多的是哪个 App？"
     ],
     "sql": "SELECT app_name, SUM(ppl_cnt) AS user_count\nFROM {table_name}\nWHERE category = '娱乐休闲'\n  AND gender = '女'\n  AND age IN ('小于20岁', '20-24岁', '25-29岁')\nGROUP BY app_name\nORDER BY user_count DESC\nLIMIT 1;",
-    "answer": "已命中高频问题缓存，返回年轻女性在休闲娱乐类 App 中使用最多的应用。"
+    "answer": "年轻女性在休闲娱乐类 App 中使用最多的应用如下。"
   },
   {
     "id": "cache_guangdong_population",
     "question": "广东省总人数是多少？",
     "sql": "SELECT\n  '广东省' AS province,\n  ROUND(\n    {population_base}.0\n    * SUM(CASE WHEN province = '广东省' THEN ppl_cnt ELSE 0 END)\n    / NULLIF(SUM(CASE WHEN province IS NOT NULL AND TRIM(province) != '' AND province != 'NA' THEN ppl_cnt ELSE 0 END), 0)\n  ) AS estimated_user_count\nFROM {table_name};",
-    "answer": "已命中高频问题缓存，返回广东省总人数估算结果。"
+    "answer": "广东省总人数估算结果如下。"
   },
   {
     "id": "cache_female_share",
     "question": "女性用户占比是多少？",
     "sql": "SELECT\n  ROUND(\n    100.0 * SUM(CASE WHEN gender = '女' THEN ppl_cnt ELSE 0 END)\n    / NULLIF(SUM(CASE WHEN gender IN ('男', '女') THEN ppl_cnt ELSE 0 END), 0),\n    2\n  ) AS female_percent\nFROM {table_name}\nWHERE gender IN ('男', '女');",
-    "answer": "已命中高频问题缓存，返回女性用户占比。"
+    "answer": "女性用户占比如下。"
   },
   {
     "id": "cache_lower_tier_high_income_male_top",
     "question": "下沉城市里高收入男性最常用的前 10 个 App 是哪些？",
     "sql": "SELECT app_name, SUM(ppl_cnt) AS user_count\nFROM {table_name}\nWHERE city_tier IN ('三线城市', '四线城市', '五线城市')\n  AND income = '20K+'\n  AND gender = '男'\nGROUP BY app_name\nORDER BY user_count DESC\nLIMIT 10;",
-    "answer": "已命中高频问题缓存，返回下沉城市高收入男性最常用的前 10 个 App。"
+    "answer": "下沉城市高收入男性最常用的前 10 个 App 如下。"
   }
 ]

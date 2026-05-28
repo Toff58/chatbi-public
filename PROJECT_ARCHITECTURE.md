@@ -689,6 +689,7 @@ Conventional Commit summary:
 - 侧边栏示例问题属于高频入口，每次都调用模型生成 SQL 会增加延迟和不确定性。
 - 当前阶段可以先把示例问题作为缓存种子，后续再扩展为按日志统计自动沉淀高频问题。
 - 缓存分支仍需要复用现有 SQL 安全、枚举值和人数口径校验，避免绕开工具层保护。
+- 缓存命中属于内部运行状态，只写日志和 Supabase，不在客户前端回答中展示。
 
 改动结果：
 - 新增 `data/frequent_question_cache.json`，先收录 5 个侧边栏示例问题及可直接执行的 SQL。
@@ -723,3 +724,19 @@ Conventional Commit summary:
 
 Conventional Commit summary:
 - `feat(logging): sync question cache fields to supabase`
+
+### 2026-05-28 缓存命中文案隐藏
+
+需求识别：
+- 高频问题缓存命中是内部执行状态，客户前端不应看到“已命中高频问题缓存”。
+- 只需要调整缓存回答种子的用户可见文案，不改前端组件和缓存链路。
+
+改动结果：
+- `data/frequent_question_cache.json` 中 5 个缓存回答改为普通业务结论口吻。
+- README 补充说明：客户前端只展示业务结论，缓存命中只进入日志和 Supabase。
+
+验证：
+- 执行缓存示例“广东省总人数是多少？”，回答不再包含“已命中”或“缓存”，仍命中缓存且 `model_call_count` 为 0。
+
+Conventional Commit summary:
+- `fix(cache): hide cache hit wording from customer answers`

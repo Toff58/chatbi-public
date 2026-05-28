@@ -212,7 +212,7 @@ LIMIT 10;
 
 高频问题缓存种子：`data/frequent_question_cache.json`
 
-当前先把侧边栏示例问题加入缓存。命中缓存时系统会在追问补全后直接执行缓存 SQL，不再调用模型生成 SQL；执行结果会写入调试日志的 `question_cache` 和 `context_usage.question_cache_hit`，便于复盘命中情况。
+当前先把侧边栏示例问题加入缓存。命中缓存时系统会在追问补全后直接执行缓存 SQL，不再调用模型生成 SQL；客户前端只展示业务结论，不展示缓存命中文案。执行结果会写入调试日志的 `question_cache` 和 `context_usage.question_cache_hit`，便于复盘命中情况。
 
 如果配置了 Supabase 日志同步，`chatbi_query_logs` 也会写入 `question_cache_hit`、`question_cache_entry_id`、`model_call_count` 和 `question_cache_result_reused`，可以直接在云端筛选缓存命中记录。
 
@@ -257,3 +257,6 @@ Conventional Commit summary:
 
 Conventional Commit summary:
 - `feat(logging): sync question cache fields to supabase`
+
+Conventional Commit summary:
+- `fix(cache): hide cache hit wording from customer answers`
