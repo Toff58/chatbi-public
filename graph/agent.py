@@ -535,12 +535,21 @@ RAG 检索到的业务规则：
         sql = tool_calls[-1]["sql"] if tool_calls else self._extract_sql_from_messages(messages)
         tool_payload = self._extract_last_tool_payload(messages)
         final_answer = self._extract_final_answer(messages)
+        used_local_fallback = False
+
+        if (
+            (not tool_payload or tool_payload.get("error") == "Agent did not call query_app_data.")
+            and sql
+        ):
+            tool_payload = self._execute_sql_without_agent_tool(sql)
+            tool_calls = [*tool_calls, {"id": "local_sql_fallback", "sql": sql}]
+            used_local_fallback = True
 
         rows = tool_payload.get("rows") if tool_payload else None
         error = tool_payload.get("error") if tool_payload else None
         sql_valid = bool(sql) and not error
 
-        if not final_answer:
+        if not final_answer or (used_local_fallback and _looks_like_sql_only_answer(final_answer)):
             final_answer = build_local_summary(rows or []) if not error else f"SQL 查询失败：\n{error}"
         final_answer = self._sanitize_customer_answer(final_answer)
         if not final_answer:
@@ -552,11 +561,20 @@ RAG 检索到的业务规则：
             "result": rows or [],
             "error": error,
             "answer": final_answer,
-            "tool_called": self._has_query_tool_call(messages),
+            "tool_called": self._has_query_tool_call(messages) or used_local_fallback,
             "tool_calls": tool_calls,
             "tool_timings": tool_payload.get("timings", {}) if tool_payload else {},
             "warnings": tool_payload.get("warnings", []) if tool_payload else [],
         }
+
+    def _execute_sql_without_agent_tool(self, sql: str) -> dict[str, Any]:
+        try:
+            payload = json.loads(query_app_data.invoke({"sql": sql}))
+        except Exception as exc:
+            return {"ok": False, "error": str(exc), "rows": [], "timings": {}}
+        if isinstance(payload, dict):
+            return payload
+        return {"ok": False, "error": "query_app_data returned an invalid payload.", "rows": [], "timings": {}}
 
     def _extract_sql_from_messages(self, messages: list[Any]) -> str | None:
         for message in reversed(messages):
@@ -643,6 +661,13 @@ RAG 检索到的业务规则：
 
 def build_agent_app() -> ChatBIAgentApp:
     return ChatBIAgentApp()
+
+
+def _looks_like_sql_only_answer(answer: str | None) -> bool:
+    if not answer:
+        return False
+    stripped = answer.strip().lower()
+    return stripped.startswith(("```sql", "select", "with"))
 
 
 def _compact_question(text: str) -> str:
