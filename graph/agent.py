@@ -583,6 +583,8 @@ RAG 检索到的业务规则：
 
         rows = tool_payload.get("rows") if tool_payload else None
         error = tool_payload.get("error") if tool_payload else None
+        if tool_payload and tool_payload.get("effective_sql"):
+            sql = str(tool_payload["effective_sql"])
         sql_valid = bool(sql) and not error
 
         if not final_answer or (used_local_fallback and _contains_sql_answer(final_answer)):

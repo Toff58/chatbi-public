@@ -7,7 +7,7 @@ from langchain_core.tools import tool
 
 from config import POPULATION_BASE
 from graph.vocabulary import INTERNAL_RESULT_COLUMN_FRAGMENTS, RATIO_COLUMN_FRAGMENTS
-from sql.executor import execute_query, validate_enum_filters, validate_select_sql
+from sql.executor import execute_query, normalize_gender_share_sql, validate_enum_filters, validate_select_sql
 
 
 @tool
@@ -15,6 +15,11 @@ def query_app_data(sql: str) -> str:
     """Validate and execute one read-only SQLite SELECT query against the app_data table."""
     tool_started_at = time.perf_counter()
     timings: dict[str, int] = {}
+    warnings: list[str] = []
+
+    sql, normalization_warning = normalize_gender_share_sql(sql)
+    if normalization_warning:
+        warnings.append(normalization_warning)
 
     validation_started_at = time.perf_counter()
     is_valid, error = validate_select_sql(sql)
@@ -47,7 +52,7 @@ def query_app_data(sql: str) -> str:
     if not has_valid_population_result:
         return _tool_response(False, result_error, [], timings=timings, started_at=tool_started_at)
 
-    return _tool_response(True, None, rows, warnings=[], timings=timings, started_at=tool_started_at)
+    return _tool_response(True, None, rows, warnings=warnings, timings=timings, started_at=tool_started_at, effective_sql=sql)
 
 def _tool_response(
     ok: bool,
@@ -57,18 +62,22 @@ def _tool_response(
     warnings: list[str] | None = None,
     timings: dict[str, int] | None = None,
     started_at: float | None = None,
+    effective_sql: str | None = None,
 ) -> str:
     payload_timings = dict(timings or {})
     if started_at is not None:
         payload_timings["tool_total_ms"] = _elapsed_ms(started_at)
+    payload = {
+        "ok": ok,
+        "error": error,
+        "rows": rows,
+        "warnings": warnings or [],
+        "timings": payload_timings,
+    }
+    if effective_sql:
+        payload["effective_sql"] = effective_sql
     return json.dumps(
-        {
-            "ok": ok,
-            "error": error,
-            "rows": rows,
-            "warnings": warnings or [],
-            "timings": payload_timings,
-        },
+        payload,
         ensure_ascii=False,
     )
 

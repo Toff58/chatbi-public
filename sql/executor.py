@@ -42,6 +42,49 @@ def validate_select_sql(sql: str) -> tuple[bool, str | None]:
     return True, None
 
 
+def normalize_gender_share_sql(sql: str) -> tuple[str, str | None]:
+    """Fix a common grouped gender-share SQL shape that turns male rows into 0%."""
+    if not _is_grouped_gender_share_query(sql):
+        return sql, None
+
+    normalized = re.sub(
+        r"""ROUND\s*\(\s*
+            100(?:\.0)?\s*\*\s*
+            SUM\s*\(\s*CASE\s+WHEN\s+gender\s*=\s*'女'\s+THEN\s+ppl_cnt\s+ELSE\s+0\s+END\s*\)
+            \s*/\s*
+            NULLIF\s*\(\s*
+                SUM\s*\(\s*CASE\s+WHEN\s+gender\s+IN\s*\(\s*'男'\s*,\s*'女'\s*\)\s+THEN\s+ppl_cnt\s+ELSE\s+0\s+END\s*\)
+                \s*,\s*0\s*
+            \)
+            \s*,\s*2\s*
+        \)""",
+        "ROUND(\n    100.0 * SUM(ppl_cnt)\n    / NULLIF(SUM(SUM(ppl_cnt)) OVER (), 0),\n    2\n  )",
+        sql,
+        flags=re.IGNORECASE | re.VERBOSE | re.DOTALL,
+    )
+    if normalized == sql:
+        normalized = re.sub(
+            r"SUM\s*\(\s*CASE\s+WHEN\s+gender\s*=\s*'女'\s+THEN\s+ppl_cnt\s+ELSE\s+0\s+END\s*\)",
+            "SUM(ppl_cnt)",
+            sql,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+
+    if normalized == sql:
+        return sql, None
+    return normalized, "已将按性别分组的占比 SQL 规范化为每个性别自身占比，避免男/女比例被写成单一女性占比。"
+
+
+def _is_grouped_gender_share_query(sql: str) -> bool:
+    lowered = sql.lower()
+    return bool(
+        re.search(r"\bselect\b[\s\S]*\bgender\b", lowered)
+        and re.search(r"\bgroup\s+by\b[\s\S]*\bgender\b", lowered)
+        and re.search(r"\b(percent|percentage|ratio|share|占比|比例)\b", lowered)
+        and re.search(r"case\s+when\s+gender\s*=\s*'女'", sql, flags=re.IGNORECASE)
+    )
+
+
 def _references_table(lowered_sql: str, table_name: str) -> bool:
     table_pattern = re.escape(table_name.lower())
     return bool(re.search(rf"\b(?:from|join)\s+{table_pattern}\b", lowered_sql))
