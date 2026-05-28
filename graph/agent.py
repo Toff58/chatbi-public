@@ -15,6 +15,7 @@ from graph.evaluation import evaluate_run
 from graph.followup import resolve_followup_question
 from graph.memory import build_memory_context, load_memory, update_memory
 from graph.preflight import QuestionPreflight
+from graph.question_cache import execute_cached_question, lookup_question_cache
 from graph.result_summary import build_local_summary
 from graph.sql_tool import query_app_data
 from graph.vocabulary import ANSWER_PROCESS_LINE_MARKERS
@@ -58,7 +59,10 @@ class ChatBIAgentApp:
         """Compatibility entry point for callers that do not need graph metadata."""
         prepared_state = {**state, **self.retrieve_context(state)}
         resolved_state = {**prepared_state, **self.resolve_followup_question(prepared_state)}
-        routed_state = {**resolved_state, **self.preflight_guardrails(resolved_state)}
+        cache_state = {**resolved_state, **self.lookup_question_cache(resolved_state)}
+        if cache_state.get("_route") == "question_cache":
+            return self.respond_question_cache(cache_state)
+        routed_state = {**cache_state, **self.preflight_guardrails(cache_state)}
         route = routed_state.get("_route") or "run_agent"
         if route == "informational":
             return self.respond_informational(routed_state)
@@ -142,6 +146,36 @@ class ChatBIAgentApp:
             }
 
         return {"_route": "run_agent"}
+
+    def lookup_question_cache(self, state: ChatBIState) -> dict[str, Any]:
+        entry = lookup_question_cache(state["question"])
+        if not entry:
+            context_usage = dict(state.get("_context_usage") or {})
+            context_usage["question_cache_hit"] = False
+            return {"_context_usage": context_usage}
+
+        reset_model_call_timings()
+        context_usage = dict(state.get("_context_usage") or {})
+        context_usage["question_cache_hit"] = True
+        context_usage["question_cache_entry_id"] = entry.get("id")
+        return {
+            "_route": "question_cache",
+            "_question_cache": entry,
+            "_context_usage": context_usage,
+        }
+
+    def respond_question_cache(self, state: ChatBIState) -> ChatBIState:
+        rag_items, matched_scopes, sql_examples, context_usage, started_at, retrieval_ms, _ = self._prepared_context(state)
+        return self._question_cache_state(
+            state,
+            rag_items,
+            matched_scopes,
+            sql_examples,
+            context_usage,
+            started_at,
+            retrieval_ms,
+            state.get("_question_cache") or {},
+        )
 
     def respond_informational(self, state: ChatBIState) -> ChatBIState:
         rag_items, matched_scopes, sql_examples, context_usage, started_at, retrieval_ms, _ = self._prepared_context(state)
@@ -508,6 +542,98 @@ class ChatBIAgentApp:
             },
         }
 
+    def _question_cache_state(
+        self,
+        state: ChatBIState,
+        rag_items: list[dict[str, Any]],
+        matched_scopes: list[dict[str, Any]],
+        sql_examples: list[dict[str, Any]],
+        context_usage: dict[str, Any],
+        started_at: float,
+        retrieval_ms: int,
+        cache_entry: dict[str, Any],
+    ) -> ChatBIState:
+        cache_payload = execute_cached_question(cache_entry)
+        total_ms = int((time.perf_counter() - started_at) * 1000)
+        sql = str(cache_payload.get("sql") or "")
+        rows = cache_payload.get("rows") or []
+        error = cache_payload.get("error")
+        answer = str(cache_payload.get("answer") or "")
+        sql_valid = bool(sql) and not error
+        if not answer:
+            answer = build_local_summary(rows) if not error else f"SQL 查询失败：\n{error}"
+
+        tool_timings = cache_payload.get("tool_timings") or {}
+        timings = {
+            "retrieval_ms": retrieval_ms,
+            "agent_model_and_tools_ms": 0,
+            "model_call_count": 0,
+            "first_model_call_ms": 0,
+            "final_model_call_ms": 0,
+            "model_calls_total_ms": 0,
+            "question_cache_lookup_ms": int(cache_payload.get("cache_lookup_ms") or 0),
+            "question_cache_result_reused": bool(cache_payload.get("cache_result_reused")),
+            "sql_tool_total_ms": int(tool_timings.get("tool_total_ms") or 0),
+            "sql_execution_ms": int(tool_timings.get("sql_execution_ms") or 0),
+            "total_ms": total_ms,
+        }
+        metrics = evaluate_run(
+            question=state["question"],
+            sql=sql,
+            result=rows,
+            answer=answer,
+            error=error,
+            rag_items=rag_items,
+            latency_ms=total_ms,
+            tool_called=bool(sql),
+        )
+        if not error:
+            try:
+                update_memory(
+                    question=state["question"],
+                    sql=sql,
+                    answer=answer,
+                    result=rows,
+                    session_id=state.get("session_id"),
+                )
+            except OSError:
+                pass
+
+        return {
+            **state,
+            "sql": sql,
+            "sql_valid": sql_valid,
+            "result": rows,
+            "error": error,
+            "summary": answer,
+            "answer": answer,
+            "rag_context": rag_items,
+            "metrics": metrics,
+            "clarifications": build_scope_clarifications(matched_scopes),
+            "timings": timings,
+            "debug_info": {
+                "timings": timings,
+                "model_calls": [],
+                "tool_calls": [{"id": "question_cache", "sql": sql}],
+                "tool_timings": tool_timings,
+                "warnings": cache_payload.get("warnings") or [],
+                "rag_context": rag_items,
+                "matched_scopes": matched_scopes,
+                "sql_examples": sql_examples,
+                "original_question": state.get("original_question"),
+                "resolved_question": state.get("question"),
+                "followup_resolution": state.get("_followup_resolution"),
+                "session_id": state.get("session_id"),
+                "context_usage": context_usage,
+                "question_cache": {
+                    "hit": True,
+                    "entry_id": cache_entry.get("id"),
+                    "result_reused": bool(cache_payload.get("cache_result_reused")),
+                },
+                "data_window": self.preflight.available_months(),
+            },
+        }
+
     def _build_user_prompt(
         self,
         question: str,
@@ -583,8 +709,6 @@ RAG 检索到的业务规则：
 
         rows = tool_payload.get("rows") if tool_payload else None
         error = tool_payload.get("error") if tool_payload else None
-        if tool_payload and tool_payload.get("effective_sql"):
-            sql = str(tool_payload["effective_sql"])
         sql_valid = bool(sql) and not error
 
         if not final_answer or (used_local_fallback and _contains_sql_answer(final_answer)):
@@ -724,6 +848,14 @@ def _strip_sql_from_answer(answer: str) -> str:
     cleaned = re.sub(r"```sql\s*.*?```", "", answer, flags=re.IGNORECASE | re.DOTALL)
     cleaned = re.sub(r"(?ims)^\s*(?:select|with)\b[\s\S]*\Z", "", cleaned)
     return cleaned.strip()
+
+
+def _build_fallback_answer(rows: list[dict[str, Any]], error: str | None) -> str:
+    if error:
+        return f"\u67e5\u8be2\u5931\u8d25\uff1a{error}"
+    if not rows:
+        return "\u67e5\u8be2\u6ca1\u6709\u8fd4\u56de\u6570\u636e\u3002"
+    return f"\u67e5\u8be2\u6210\u529f\uff0c\u8fd4\u56de {len(rows)} \u6761\u7ed3\u679c\u3002"
 
 
 def _compact_question(text: str) -> str:

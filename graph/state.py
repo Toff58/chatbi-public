@@ -23,6 +23,7 @@ class ChatBIState(TypedDict, total=False):
     _matched_scopes: list[dict[str, Any]]
     _sql_examples: list[dict[str, Any]]
     _context_usage: dict[str, Any]
+    _question_cache: dict[str, Any]
     _retrieval_ms: int
     _route: str
     _guardrail_issue: dict[str, Any]

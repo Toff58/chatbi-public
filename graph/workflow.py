@@ -1,6 +1,6 @@
 from langgraph.graph import END, START, StateGraph
 
-from graph.nodes import ChatBIWorkflowNodes, route_after_preflight
+from graph.nodes import ChatBIWorkflowNodes, route_after_cache_lookup, route_after_preflight
 from graph.state import ChatBIState
 
 
@@ -12,6 +12,10 @@ WORKFLOW_STEPS = [
     {
         "name": "resolve_followup_question",
         "description": "识别省略追问，基于上一轮问题和 SQL filters 补全为完整问数问题。",
+    },
+    {
+        "name": "lookup_question_cache",
+        "description": "高频问题精确命中后跳过模型生成，直接复用缓存 SQL 和结果。"
     },
     {
         "name": "preflight_guardrails",
@@ -35,7 +39,7 @@ WORKFLOW_STEPS = [
     },
     {
         "name": "log_interaction",
-        "description": "应用层写入 CSV/JSONL 日志，SQL Agent 更新当前 session 的轻量 memory；配置 Supabase 后同步云端日志。",
+        "description": "应用层写入 CSV/JSONL 日志，SQL Agent 更新当前 session 的轻量 memory。",
     },
 ]
 
@@ -49,6 +53,8 @@ def build_graph():
     workflow = StateGraph(ChatBIState)
     workflow.add_node("retrieve_context", nodes.retrieve_context)
     workflow.add_node("resolve_followup_question", nodes.resolve_followup_question)
+    workflow.add_node("lookup_question_cache", nodes.lookup_question_cache)
+    workflow.add_node("respond_question_cache", nodes.respond_question_cache)
     workflow.add_node("preflight_guardrails", nodes.preflight_guardrails)
     workflow.add_node("respond_informational", nodes.respond_informational)
     workflow.add_node("respond_enum_lookup", nodes.respond_enum_lookup)
@@ -57,7 +63,15 @@ def build_graph():
 
     workflow.add_edge(START, "retrieve_context")
     workflow.add_edge("retrieve_context", "resolve_followup_question")
-    workflow.add_edge("resolve_followup_question", "preflight_guardrails")
+    workflow.add_edge("resolve_followup_question", "lookup_question_cache")
+    workflow.add_conditional_edges(
+        "lookup_question_cache",
+        route_after_cache_lookup,
+        {
+            "question_cache": "respond_question_cache",
+            "preflight": "preflight_guardrails",
+        },
+    )
     workflow.add_conditional_edges(
         "preflight_guardrails",
         route_after_preflight,
@@ -68,6 +82,7 @@ def build_graph():
             "run_agent": "run_sql_agent",
         },
     )
+    workflow.add_edge("respond_question_cache", END)
     workflow.add_edge("respond_informational", END)
     workflow.add_edge("respond_enum_lookup", END)
     workflow.add_edge("respond_failure", END)

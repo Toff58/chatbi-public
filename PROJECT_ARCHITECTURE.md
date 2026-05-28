@@ -33,7 +33,7 @@ Streamlit 应用层辅助模块。
 
 职责：
 - `ui/database.py`：启动时检查 SQLite 与 CSV 是否一致，不一致则自动导入。
-- `ui/query_logging.py`：写入查询日志 `query_log.csv` 和调试日志 `query_debug.jsonl`；配置 Supabase 后同步云端日志。
+- `ui/query_logging.py`：写入查询日志 `query_log.csv` 和调试日志 `query_debug.jsonl`。
 - `ui/dataframe.py`：过滤中间计算列，将底层字段名转换为业务展示名。
 - `ui/charts.py`：根据结果形态选择条形图、环图、分组柱状图或折线图，并渲染 Altair 图表。
 - `ui/downloads.py`：渲染 CSV、Excel、图表下载按钮。
@@ -49,8 +49,8 @@ Streamlit 应用层辅助模块。
 对外保留原来的 `build_graph()` 入口，并显式构建 LangGraph `StateGraph`。
 
 职责：
-- 注册 `retrieve_context`、`preflight_guardrails`、`respond_informational`、`respond_enum_lookup`、`respond_failure`、`run_sql_agent` 等节点。
-- 通过条件边把预检结果路由到枚举直答、数据边界说明、失败响应或 SQL Agent 执行。
+- 注册 `retrieve_context`、`resolve_followup_question`、`lookup_question_cache`、`respond_question_cache`、`preflight_guardrails`、`respond_informational`、`respond_enum_lookup`、`respond_failure`、`run_sql_agent` 等节点。
+- 通过条件边把缓存命中和预检结果路由到缓存直答、枚举直答、数据边界说明、失败响应或 SQL Agent 执行。
 - 返回 `CompiledStateGraph`，调用方仍然只需要 `.invoke(state)`。
 - 保持 `app.py`、测试脚本等调用方不需要知道内部实现细节。
 
@@ -60,7 +60,7 @@ LangGraph 节点适配层。
 
 职责：
 - 将 `ChatBIAgentApp` 的运行时方法包装成 LangGraph 节点函数。
-- 提供 `route_after_preflight()` 条件路由函数。
+- 提供 `route_after_cache_lookup()` 和 `route_after_preflight()` 条件路由函数。
 - 让节点和边可以通过 `build_graph().nodes` 直接被观察和测试。
 
 ### `graph/agent.py`
@@ -128,6 +128,16 @@ LangChain 工具和 SQL 结果保护。
 - 维护可供 RAG 检索的问题-SQL 样例。
 - 标记少量 `include_in_prompt` 样例，让 SQL prompt 保留固定 few-shot。
 - 覆盖 App 排行、画像筛选 App 排行、宏观省份人数、女性占比 rebase、字段取值枚举等高风险口径。
+
+### `graph/question_cache.py`
+
+高频问题缓存。
+
+职责：
+- 读取 `data/frequent_question_cache.json` 中的高频问题缓存种子。
+- 对用户问题做轻量规范化后精确匹配缓存问题和别名。
+- 命中后复用缓存 SQL，经 `query_app_data` 统一校验和执行；同进程内会复用已执行成功的缓存结果。
+- 将命中状态、缓存条目 id 和结果复用状态写入 `debug_info.question_cache` 与 `context_usage`。
 
 ### `graph/business_terms.py`
 
@@ -251,12 +261,14 @@ SQLite 查询执行层。
 3. `app.py` 调用 `graph.workflow.build_graph()`，并把 `session_id` 放进初始 state。
 4. `build_graph()` 返回 LangGraph `CompiledStateGraph`。
 5. `retrieve_context` 节点检索 schema、字段枚举、RAG 规则、few-shot 示例、业务词映射和当前 session 的轻量 memory。
-6. `preflight_guardrails` 节点判断数据范围、不可支持问题、字段枚举问法和未知字段。
-7. 条件边把请求路由到 `respond_informational`、`respond_enum_lookup`、`respond_failure` 或 `run_sql_agent`。
-8. `run_sql_agent` 使用 LangChain `create_agent` 生成 SQL，并强制调用 `query_app_data`。
-9. `query_app_data` 工具校验 SQL，执行 SQLite 查询，并阻断超过 6 亿的人数结果、宏观直接求和和中间计算列。
-10. Agent 根据工具结果生成中文结论，并更新当前 session 的 memory。
-11. `app.py` 通过 `ui.*` 模块展示结论、图表和明细，保存页面会话历史，并写入日志。
+6. `resolve_followup_question` 节点补全省略追问，并用补全后的问题重新检索上下文。
+7. `lookup_question_cache` 节点匹配高频问题缓存；命中后直接进入缓存响应分支，不调用模型。
+8. `preflight_guardrails` 节点判断数据范围、不可支持问题、字段枚举问法和未知字段。
+9. 条件边把请求路由到 `respond_question_cache`、`respond_informational`、`respond_enum_lookup`、`respond_failure` 或 `run_sql_agent`。
+10. `run_sql_agent` 使用 LangChain `create_agent` 生成 SQL，并强制调用 `query_app_data`。
+11. `query_app_data` 工具校验 SQL，执行 SQLite 查询，并阻断超过 6 亿的人数结果、宏观直接求和和中间计算列。
+12. Agent 根据工具结果生成中文结论，并更新当前 session 的 memory。
+13. `app.py` 通过 `ui.*` 模块展示结论、图表和明细，保存页面会话历史，并写入日志。
 
 ## 文档维护规则
 
@@ -568,8 +580,8 @@ Conventional Commit summary:
 - `graph/evaluation.py` 补充字段枚举类问题的 RAG 期望项。
 
 验证：
-- 执行 `python -m py_compile app.py graph\agent.py graph\rag.py graph\evaluation.py deepseek_client.py` 通过。
-- 执行 `python test_graph.py` 通过。
+- 执行 `.\.venv\Scripts\python.exe -m py_compile app.py graph\agent.py graph\rag.py graph\evaluation.py deepseek_client.py` 通过。
+- 执行 `.\.venv\Scripts\python.exe test_graph.py` 通过。
 - 轻量验证“我国有哪些三线城市？”命中枚举逻辑，返回城市等级“三线城市”，模型调用次数为 0。
 - 轻量验证 App Top 样例图表标题为“App 用户规模 Top 3”，明细列展示为“App”“用户数”。
 
@@ -595,7 +607,7 @@ Conventional Commit summary:
 
 验证：
 - 执行 `.\.venv\Scripts\python.exe -m compileall -q app.py main.py graph ui sql data tests` 通过。
-- 执行 `python test_graph.py` 通过。
+- 执行 `.\.venv\Scripts\python.exe test_graph.py` 通过。
 - 轻量验证“有哪些城市等级可以问？”命中 `enum_lookup` 分支，模型调用次数为 0。
 - 轻量验证“最近几个月用户数趋势如何？”命中 `informational` 分支，不生成跨月 SQL。
 
@@ -619,7 +631,7 @@ Conventional Commit summary:
 
 验证：
 - 执行 `.\.venv\Scripts\python.exe -m compileall app.py main.py session_ids.py graph ui tests test_graph.py` 通过。
-- 执行 `python test_graph.py` 通过。
+- 执行 `.\.venv\Scripts\python.exe test_graph.py` 通过。
 - 临时目录 smoke test 验证同一 session 能读回 memory，不同 session 互不串。
 - 执行 `.\.venv\Scripts\python.exe main.py --session-id codex-smoke "有哪些城市等级可以问？"` 通过，枚举分支不调用模型。
 - 当前环境没有 `DEEPSEEK_API_KEY`，未运行需要模型 API 的完整 SQL Agent 回归。
@@ -643,10 +655,10 @@ Conventional Commit summary:
 - 新增 `tests/test_followup.py`，覆盖“湖南省呢？”补全为“湖南省高收入人群的性别比例”、多槽位追问替换，以及独立完整问题不被误补全。
 
 验证：
-- 执行 `python -m py_compile graph\followup.py graph\state.py graph\agent.py graph\nodes.py graph\workflow.py` 通过。
+- 执行 `.\.venv\Scripts\python.exe -m py_compile graph\followup.py graph\state.py graph\agent.py graph\nodes.py graph\workflow.py` 通过。
 - 当前环境没有安装 `pytest`，未运行 `python -m pytest`。
-- 执行轻量函数测试：`python -c "from tests.test_followup import test_resolves_province_followup_from_previous_question, test_keeps_standalone_question_unchanged, test_resolves_multiple_followup_slots; test_resolves_province_followup_from_previous_question(); test_keeps_standalone_question_unchanged(); test_resolves_multiple_followup_slots(); print('followup tests passed')"` 通过。
-- 执行 `python -m compileall -q app.py main.py graph ui sql data tests test_graph.py` 通过。
+- 执行轻量函数测试：`.\.venv\Scripts\python.exe -c "from tests.test_followup import test_resolves_province_followup_from_previous_question, test_keeps_standalone_question_unchanged, test_resolves_multiple_followup_slots; test_resolves_province_followup_from_previous_question(); test_keeps_standalone_question_unchanged(); test_resolves_multiple_followup_slots(); print('followup tests passed')"` 通过。
+- 执行 `.\.venv\Scripts\python.exe -m compileall -q app.py main.py graph ui sql data tests test_graph.py` 通过。
 
 Conventional Commit summary:
 - `feat(agent): resolve contextual follow-up questions`
@@ -663,10 +675,33 @@ Conventional Commit summary:
 - 50 条样例按风险分层：critical 16 条、high 19 条、medium 15 条。
 
 验证：
-- 执行 `python -m py_compile tests\test_cases.py tests\run_agent_tests.py` 通过。
+- 执行 `.\.venv\Scripts\python.exe -m py_compile tests\test_cases.py tests\run_agent_tests.py` 通过。
 - 执行轻量统计验证：`TEST_CASES` 数量为 50，`test_id` 从 `T001` 到 `T050`，且没有重复 ID。
 - 抽跑不依赖模型的预检分支样例：`T016-T023`、`T044-T048` 通过。
 - 当前环境没有 `DEEPSEEK_API_KEY`，未运行需要模型 API 的完整 50 条 Agent 回归。
 
 Conventional Commit summary:
 - `test(agent): expand regression suite to 50 cases`
+
+### 2026-05-28 高频问题缓存
+
+需求识别：
+- 侧边栏示例问题属于高频入口，每次都调用模型生成 SQL 会增加延迟和不确定性。
+- 当前阶段可以先把示例问题作为缓存种子，后续再扩展为按日志统计自动沉淀高频问题。
+- 缓存分支仍需要复用现有 SQL 安全、枚举值和人数口径校验，避免绕开工具层保护。
+
+改动结果：
+- 新增 `data/frequent_question_cache.json`，先收录 5 个侧边栏示例问题及可直接执行的 SQL。
+- 新增 `graph/question_cache.py`，负责缓存条目读取、问题规范化、精确命中和同进程结果复用。
+- LangGraph 新增 `lookup_question_cache` 与 `respond_question_cache` 分支，位于追问补全之后、预检之前；命中后不调用模型。
+- `debug_info.question_cache` 和 `context_usage.question_cache_hit` 记录缓存命中、条目 id 和结果复用状态。
+- README 补充高频问题缓存说明、流程节点和缓存种子文件位置。
+
+验证：
+- 执行 `.\.venv\Scripts\python.exe -m py_compile graph\question_cache.py graph\agent.py graph\nodes.py graph\workflow.py graph\state.py` 通过。
+- 执行 `.\.venv\Scripts\python.exe test_graph.py` 通过。
+- 轻量验证 5 个侧边栏示例问题全部命中缓存，`model_call_count` 为 0，SQL 校验通过并返回结果。
+- 抽测“有哪些城市等级可以问？”仍命中枚举直答分支，“最近几个月用户数趋势如何？”仍命中数据范围预检分支。
+
+Conventional Commit summary:
+- `feat(cache): add frequent question cache for examples`

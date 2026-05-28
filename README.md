@@ -1,52 +1,52 @@
-# ChatBI
+# ChatBI / Text-to-SQL / AI Agent 数据分析助手
 
-ChatBI 是一个基于 Streamlit、SQLite 和 LLM Agent 的自然语言问数应用。用户可以用中文提出 BI 问题，系统会根据本地 App 人群数据生成安全 SQL，执行查询，并返回中文结论、图表和明细表。
+## 项目定位
 
-公开演示版按 `session_id` 持久化轻量 Memory 和页面会话历史：首次打开页面会自动把 `session_id` 写入 URL，同一 URL 刷新后可以恢复最近问答，不同访客的上下文互不混用。
+这是一个面向面试展示的 ChatBI 原型：把传统 BI / SQL 查询流程升级为可对话的 AI Agent 数据分析助手。用户用自然语言提问，系统生成安全 SQL，查询本地 SQLite 数据，并输出中文结论、图表和明细结果。
+
+项目重点不是模型训练，也不是生产级 Agent 平台，而是展示 BI、SQL、Python、LLM 应用开发、Tool Calling、RAG 示例库、日志和轻量 workflow 的工程闭环。
+
+## 业务背景
+
+业务人员经常需要问类似问题：
+
+- 用户数最多的前 10 个 App 是哪些？
+- 年轻女性在娱乐休闲类 App 里最常用的是哪个？
+- 广东省总人数是多少？
+- 女性用户占比是多少？
+
+传统方式通常需要分析师理解需求、确认口径、写 SQL、查库、整理结论。本项目把这个流程拆成 Agent workflow，帮助非技术用户更快完成问数和初步分析。
 
 ## 核心能力
 
-- 自然语言问数：支持 Top 排行、画像筛选、占比、分布和单月统计等常见 BI 问题。
-- 安全 SQL 生成：只允许 `SELECT` / `WITH` 查询，并限制访问本地 `app_data` 表。
-- 数据口径约束：基于字段枚举、业务规则和 few-shot 示例减少字段编造和错误口径。
-- 数据边界保护：对跨 App 重合、共同用户、去重覆盖、留存、频次、时长、订单金额等当前数据不支持的问题直接说明限制，不生成误导性答案。
-- 结果呈现：在 Streamlit 页面展示中文结论、自然语言图表标题、业务化列名和明细数据。
+- 自然语言理解：识别 Top、排行、画像筛选、占比、宏观人数估算等常见 BI 问题。
+- SQL 生成：根据表结构、字段枚举、业务口径和 few-shot 示例生成 SQLite SELECT SQL。
+- SQL 校验：只允许 SELECT / WITH，拒绝 DELETE、UPDATE、DROP、PRAGMA 等危险语句，并校验枚举值和人数口径。
+- 数据查询：通过 `query_app_data` 工具读取本地 SQLite 表 `app_data`。
+- 结果总结：根据工具返回的 JSON 输出简洁中文结论。
+- 展示优化：图表标题、tooltip、图例、明细表和下载文件使用业务名称，避免直接暴露底层字段名。
 - 可问范围：侧边栏提供字段字典和指标字典，用户可查看可问维度、可用取值和指标口径。
 - 枚举问法：对“有哪些/取值/枚举/可问范围”类问题直接返回维度取值，不改写成人数统计。
 - 结果下载：明细支持 CSV / Excel 下载，图表优先支持 JPG 下载并保留 SVG 回退。
-- Session Memory：按 `session_id` 记录最近问题、SQL、主题和筛选条件，用于公开 demo 的多轮上下文参考。
-- 会话恢复：同一 `session_id` 的页面历史会持久化，刷新或再次打开同一 URL 后可继续查看。
-- 日志观测：本地写入 CSV/JSONL 日志；配置 Supabase 后可同步写入云端日志表。
-- 回归评测：内置 50 条产品级评测样例，覆盖 SQL 生成、枚举直答、数据边界、安全拒绝和不可支持问题。
-
-## 数据范围
-
-当前演示数据表为 `app_data`，数据窗口为 `2025-07` 单月。
-
-主要字段：
-
-- `app_name`：App 名称
-- `category` / `category_new`：App 品类
-- `active_month`：活跃月份，当前只有 `2025-07`
-- `city_tier`、`income`、`gender`、`province`、`age`：用户画像维度
-- `ppl_cnt`：用户数，数据库中已是可直接使用的实际人数
-
-用户界面不会直接展示底层字段名。常见展示名包括：`app_name` 展示为“App”，`user_count` 展示为“用户数”，`estimated_user_count` 展示为“估算用户数”，`city_tier` 展示为“城市等级”。
-
-字段取值类问题会走枚举逻辑，例如“有哪些城市等级可以问”“省份有哪些取值”“有哪些品类”。这类问题只返回对应维度的可用取值，不会改写成人数统计、排行或占比。
-
-数据是 App × 品类 × 月份 × 城市等级 × 收入 × 性别 × 省份 × 年龄 的聚合切片，不包含用户 ID、设备 ID、订单、访问日志或跨 App 关联关系。因此可以回答 App 规模、画像分布和聚合排行，但不能回答同一批用户在多个 App 之间的交叉重合、去重覆盖、留存、转化或行为频次。
+- RAG 示例库：使用本地 JSON 维护问题-SQL 示例，不引入复杂向量数据库。
+- 高频问题缓存：使用本地 JSON 维护高频问题缓存，示例问题命中后跳过模型生成，直接复用缓存 SQL 并返回结果。
+- 轻量 Memory：按 `session_id` 持久化最近问题、SQL、主题和常用筛选条件，用于公开 demo 的多轮上下文参考。
+- 会话恢复：Streamlit URL 自动带上 `session_id`，同一 URL 刷新后可恢复最近会话历史。
+- 日志观测：写入查询日志和调试日志，方便复盘 SQL、工具调用、耗时和结果质量。
+- 测试入口：提供不依赖模型的 smoke test 和可选的 Agent 回归测试入口。
 
 ## Agent Workflow
 
 当前项目保持单 Agent，不强行拆 Planner/Reviewer 等多 Agent；但编排层已经使用显式 LangGraph `StateGraph`，让检索、预检、枚举直答和 SQL Agent 执行成为可见节点。核心流程如下：
 
 1. `retrieve_context`：读取表结构、字段枚举、RAG 规则、few-shot 示例和当前 session 的轻量 memory。
-2. `preflight_guardrails`：判断数据月份范围、不可支持问题、字段枚举问法和未知字段。
-3. 条件路由：枚举/数据边界/失败分支直接返回；正常分析问题进入 `run_sql_agent`。
-4. `run_sql_agent`：LangChain `create_agent` 生成 SQL，并强制调用 `query_app_data`。
-5. `query_app_data`：工具层校验 SQL 安全性、字段枚举、人数口径和结果上限，再查询 SQLite。
-6. `log_interaction`：应用层写入 CSV/JSONL 日志，SQL Agent 更新当前 session 的轻量 memory；配置 Supabase 后同步云端日志。
+2. `resolve_followup_question`：对“湖南省呢？”这类省略追问做确定性补全。
+3. `lookup_question_cache`：高频问题精确命中后跳过模型生成，直接复用缓存 SQL 和结果。
+4. `preflight_guardrails`：判断数据月份范围、不可支持问题、字段枚举问法和未知字段。
+5. 条件路由：缓存/枚举/数据边界/失败分支直接返回；正常分析问题进入 `run_sql_agent`。
+6. `run_sql_agent`：LangChain `create_agent` 生成 SQL，并强制调用 `query_app_data`。
+7. `query_app_data`：工具层校验 SQL 安全性、字段枚举、人数口径和结果上限，再查询 SQLite。
+8. `log_interaction`：应用层写入 CSV/JSONL 日志，SQL Agent 更新当前 session 的轻量 memory。
 
 ## 技术栈
 
@@ -80,7 +80,8 @@ ChatBI 是一个基于 Streamlit、SQLite 和 LLM Agent 的自然语言问数应
 │   ├── vocabulary.py              # 业务词表、枚举问法和保护关键字
 │   ├── rag.py                     # 轻量 RAG 规则检索
 │   ├── sql_examples.py            # 读取 data/sql_examples.json
-│   ├── memory.py                  # 按 session_id 隔离的轻量短期 memory
+│   ├── question_cache.py           # 高频问题缓存命中和缓存结果执行
+│   ├── memory.py                  # 轻量短期 memory
 │   └── prompts/
 │       ├── sql_generation_prompt.md
 │       └── answer_generation_prompt.md
@@ -88,7 +89,7 @@ ChatBI 是一个基于 Streamlit、SQLite 和 LLM Agent 的自然语言问数应
 │   └── executor.py                # SQL 校验、枚举校验、SQLite 查询
 ├── ui/
 │   ├── database.py                # 启动时数据库一致性检查和 CSV 导入
-│   ├── query_logging.py           # 查询日志、调试日志和可选 Supabase 日志
+│   ├── query_logging.py           # 查询日志和调试日志
 │   ├── dataframe.py               # 结果表展示名和中间列过滤
 │   ├── charts.py                  # 图表类型选择和 Altair 渲染
 │   ├── downloads.py               # 下载按钮组织
@@ -100,28 +101,52 @@ ChatBI 是一个基于 Streamlit、SQLite 和 LLM Agent 的自然语言问数应
 ├── data/
 │   ├── app_data.csv               # 演示数据
 │   ├── import_csv_to_db.py        # CSV 导入脚本
-│   └── sql_examples.json          # 问题-SQL few-shot 示例库
+│   ├── sql_examples.json          # 问题-SQL few-shot 示例库
+│   └── frequent_question_cache.json # 高频问题缓存种子
+├── logs/
+│   ├── query_log.csv              # 查询日志，运行后生成/追加
+│   ├── memory/                    # 按 session_id 隔离的轻量 memory，运行后生成
+│   └── chat_sessions/             # 按 session_id 隔离的页面会话历史，运行后生成
 ├── tests/
 │   ├── test_cases.py              # 50 条产品级回归评测样例
 │   └── run_agent_tests.py         # 需要模型 API 的回归测试
-└── docs/                          # 架构、产品和工程说明
+└── docs/
+    ├── resume_ai_agent.md
+    ├── resume_bi_data.md
+    └── interview_preparation.md
 ```
 
-## 本地运行
+## 数据说明
 
-安装依赖：
+当前数据表：`app_data`
 
-```bash
-pip install -r requirements.txt
-```
+核心字段：
 
-首次运行或数据更新后导入 SQLite：
+- `app_name`：App 名称
+- `category` / `category_new`：App 品类
+- `active_month`：活跃月份，当前只有 `2025-07`
+- `city_tier`、`income`、`gender`、`province`、`age`：用户画像维度
+- `ppl_cnt`：用户数，数据库中已是可直接使用的实际人数
+
+用户界面不会直接展示底层字段名。常见展示名包括：`app_name` 展示为“App”，`user_count` 展示为“用户数”，`estimated_user_count` 展示为“估算用户数”，`city_tier` 展示为“城市等级”。
+
+字段取值类问题会走枚举逻辑，例如“有哪些城市等级可以问”“省份有哪些取值”“有哪些品类”。这类问题只返回对应维度的可用取值，不会改写成人数统计、排行或占比。
+
+## 如何运行
+
+首次或数据更新后导入数据库：
 
 ```bash
 python create_db.py
 ```
 
-启动 Streamlit 页面：
+运行本地 smoke test，不需要模型 API：
+
+```bash
+python test_graph.py
+```
+
+运行 Streamlit 页面：
 
 ```bash
 streamlit run app.py
@@ -129,63 +154,101 @@ streamlit run app.py
 
 页面首次打开会自动生成 `session_id` 并写入 URL 查询参数；刷新或再次打开同一 URL 时，会读取同一个 session 的会话历史和轻量 memory。侧边栏“清空会话”会同时清除当前 session 的页面历史和 memory。
 
-命令行单次问数需要配置 `DEEPSEEK_API_KEY`：
+命令行单次问数，需要配置 `DEEPSEEK_API_KEY`：
 
 ```bash
 python main.py "用户数最多的前 10 个 App 是哪些？"
 ```
 
-命令行也可以显式传入 session：
-
-```bash
-python main.py --session-id demo-session "用户数最多的前 10 个 App 是哪些？"
-```
-
-运行不依赖模型 API 的 smoke test：
-
-```bash
-python test_graph.py
-```
-
-运行 Agent 回归测试需要配置 `DEEPSEEK_API_KEY`：
+运行 Agent 回归测试，需要配置 `DEEPSEEK_API_KEY`：
 
 ```bash
 python tests/run_agent_tests.py
 ```
 
-## 配置
+## 示例输出
 
-本地开发可以通过环境变量或 Streamlit Secrets 配置密钥：
+问题：
 
-```toml
-DEEPSEEK_API_KEY = "your-deepseek-api-key"
-SUPABASE_URL = "https://your-project-ref.supabase.co"
-SUPABASE_SERVICE_ROLE_KEY = "your-service-role-key"
+```text
+用户数最多的前 10 个 App 是哪些？
 ```
 
-不要提交 `.streamlit/secrets.toml`。
+可能生成的 SQL：
+
+```sql
+SELECT app_name, SUM(ppl_cnt) AS user_count
+FROM app_data
+GROUP BY app_name
+ORDER BY user_count DESC
+LIMIT 10;
+```
+
+回答形态：
+
+```text
+用户数最多的 App 主要集中在若干头部应用，系统会返回前 10 名 App 及对应用户数，并在页面中展示表格和图表。
+```
 
 ## 日志与 Memory
 
-- 本地查询日志：`logs/query_log.csv`
-- 本地调试日志：`logs/query_debug.jsonl`
-- Session memory：`logs/memory/<session_id>.json`
-- 页面会话历史：`logs/chat_sessions/<session_id>.json`
-- 可选云端日志：Supabase 表 `chatbi_query_logs`
+查询日志：`logs/query_log.csv`
 
-查询日志、调试日志和 Supabase 日志都会携带 `session_id`，方便按公开 demo 访客维度复盘问题、生成 SQL、工具调用、耗时、结果摘要和最终回答。
+字段包括：
 
-## 示例问题
+- 时间
+- session_id
+- 用户问题
+- 生成 SQL
+- 是否校验通过
+- 查询结果摘要
+- 最终回答
 
-- 用户数最多的前 10 个 App 是哪些？
-- 年轻女性在娱乐休闲类 App 里最常用的是哪个？
-- 广东省总人数是多少？
-- 女性用户占比是多少？
-- 一线城市里网络购物类 App 用户数最多的前 5 个是哪些？
+调试日志：`logs/query_debug.jsonl`
 
-## 后续方向
+轻量 Memory：`logs/memory/<session_id>.json`
 
-- 将 50 条回归评测接入自动化质量看板，并继续扩充真实问法变体。
+页面会话历史：`logs/chat_sessions/<session_id>.json`
+
+高频问题缓存种子：`data/frequent_question_cache.json`
+
+当前先把侧边栏示例问题加入缓存。命中缓存时系统会在追问补全后直接执行缓存 SQL，不再调用模型生成 SQL；执行结果会写入调试日志的 `question_cache` 和 `context_usage.question_cache_hit`，便于复盘命中情况。
+
+Memory 只记录当前 session 最近几次交互的问题、SQL、主题和筛选条件，用于短期上下文参考。公开 demo 中不同访客的上下文不会混在同一个 memory 文件里；面试时可以解释为“按 session 隔离的轻量上下文记忆”，后续可升级为用户偏好记忆或企业知识库记忆。
+
+## 面试展示重点
+
+- 这个项目不是算法训练项目，而是 LLM 应用工程项目。
+- 我的优势是 BI / SQL / 数据分析背景，知道业务问数里的口径、字段、筛选和结果表达问题。
+- Agent 的价值不只是生成 SQL，而是把生成、校验、执行、总结、日志复盘串成可解释流程。
+- RAG 在这里不是复杂向量库，而是把业务口径和 SQL 示例注入上下文，降低模型编造字段和错误口径的概率。
+- SQL 安全通过 prompt 约束和工具层校验双保险完成。
+
+## 后续优化方向
+
+1 天内可做：
+
+- 增加更多业务问题-SQL 示例。
+- 补充失败 SQL 的重试策略。
+- 在页面上增加“查看 SQL”开发调试开关。
+
+1 周内可做：
+
+- 增加 FastAPI 服务层。
 - 接入更多数据表和表关系说明。
-- 增加 SQL 重试、澄清问题和权限控制。
-- 将 Streamlit 原型扩展为 API 服务与多用户部署形态。
+- 将 50 条回归评测接入自动化质量看板，并继续扩充真实问法变体。
+
+面试后继续做：
+
+- 接入向量检索或企业知识库。
+- 支持多轮追问和更完整的上下文管理。
+- 做权限、审计、部署和多用户隔离。
+
+Conventional Commit summary:
+- `docs(readme): add interview-oriented chatbi overview`
+
+Conventional Commit summary:
+- `feat(memory): persist demo memory by session id`
+
+Conventional Commit summary:
+- `feat(cache): add frequent question cache for examples`

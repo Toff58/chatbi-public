@@ -4,7 +4,7 @@ from graph.agent import ChatBIAgentApp
 from graph.state import ChatBIState
 
 
-RouteName = Literal["informational", "enum_lookup", "failure", "run_agent"]
+RouteName = Literal["question_cache", "informational", "enum_lookup", "failure", "run_agent"]
 
 
 class ChatBIWorkflowNodes:
@@ -21,6 +21,12 @@ class ChatBIWorkflowNodes:
 
     def preflight_guardrails(self, state: ChatBIState) -> dict:
         return self.runtime.preflight_guardrails(state)
+
+    def lookup_question_cache(self, state: ChatBIState) -> dict:
+        return self.runtime.lookup_question_cache(state)
+
+    def respond_question_cache(self, state: ChatBIState) -> ChatBIState:
+        return self.runtime.respond_question_cache(state)
 
     def respond_informational(self, state: ChatBIState) -> ChatBIState:
         return self.runtime.respond_informational(state)
@@ -46,3 +52,9 @@ def route_after_preflight(state: ChatBIState) -> RouteName:
     if route == "run_agent":
         return "run_agent"
     return "failure"
+
+
+def route_after_cache_lookup(state: ChatBIState) -> Literal["question_cache", "preflight"]:
+    if state.get("_route") == "question_cache":
+        return "question_cache"
+    return "preflight"
