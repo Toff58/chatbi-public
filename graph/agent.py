@@ -585,7 +585,7 @@ RAG 检索到的业务规则：
         error = tool_payload.get("error") if tool_payload else None
         sql_valid = bool(sql) and not error
 
-        if not final_answer or (used_local_fallback and _looks_like_sql_only_answer(final_answer)):
+        if not final_answer or (used_local_fallback and _contains_sql_answer(final_answer)):
             final_answer = build_local_summary(rows or []) if not error else f"SQL 查询失败：\n{error}"
         final_answer = self._sanitize_customer_answer(final_answer)
         if not final_answer:
@@ -670,6 +670,7 @@ RAG 检索到的业务规则：
 
     def _sanitize_customer_answer(self, answer: str) -> str:
         sanitized = answer.strip()
+        sanitized = _strip_sql_from_answer(sanitized)
         sanitized = _strip_reasoning_process_text(sanitized)
         sanitized = re.sub(r"（[^（）]*(?:base|后端|上限|校验|系统约束)[^（）]*）", "", sanitized, flags=re.IGNORECASE)
         sanitized = re.sub(r"\([^()]*(?:base|后端|上限|校验|系统约束)[^()]*\)", "", sanitized, flags=re.IGNORECASE)
@@ -692,7 +693,9 @@ RAG 检索到的业务规则：
         sanitized = "\n".join(sanitized_lines).strip()
         if sanitized:
             return sanitized
-        return "" if _contains_backend_only_text(answer) else answer
+        if _contains_backend_only_text(answer) or _contains_sql_answer(answer):
+            return ""
+        return answer
 
 
 def build_agent_app() -> ChatBIAgentApp:
@@ -704,6 +707,21 @@ def _looks_like_sql_only_answer(answer: str | None) -> bool:
         return False
     stripped = answer.strip().lower()
     return stripped.startswith(("```sql", "select", "with"))
+
+
+def _contains_sql_answer(answer: str | None) -> bool:
+    if not answer:
+        return False
+    return bool(
+        re.search(r"```sql\s*.*?```", answer, flags=re.IGNORECASE | re.DOTALL)
+        or re.search(r"(?im)^\s*(select|with)\b", answer)
+    )
+
+
+def _strip_sql_from_answer(answer: str) -> str:
+    cleaned = re.sub(r"```sql\s*.*?```", "", answer, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"(?ims)^\s*(?:select|with)\b[\s\S]*\Z", "", cleaned)
+    return cleaned.strip()
 
 
 def _compact_question(text: str) -> str:

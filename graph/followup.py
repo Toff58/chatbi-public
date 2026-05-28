@@ -126,12 +126,16 @@ def resolve_followup_question(
 
 def _latest_interaction(memory: dict[str, Any]) -> dict[str, Any] | None:
     interactions = memory.get("recent_interactions") or []
-    if not interactions or not isinstance(interactions[0], dict):
+    if not interactions:
         return None
-    latest = interactions[0]
-    if latest.get("sql") and latest.get("result_count", 0) != 0:
-        return latest
-    return latest if latest.get("question") else None
+    valid_interactions = [item for item in interactions if isinstance(item, dict)]
+    for item in valid_interactions:
+        if item.get("sql") and item.get("result_count", 0) != 0:
+            return item
+    for item in valid_interactions:
+        if item.get("question"):
+            return item
+    return None
 
 
 def _looks_like_followup(question: str, detected_slots: list[dict[str, str]]) -> bool:

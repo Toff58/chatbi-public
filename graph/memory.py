@@ -67,9 +67,9 @@ def build_memory_context(memory: dict[str, Any]) -> str:
         filter_text = _format_filters(filters)
         lines.append(
             f"{index}. 最近问题：{item.get('question', '')}\n"
-            f"   最近 SQL：{item.get('sql', '') or '无'}\n"
             f"   主题：{item.get('topic', '未识别')}\n"
-            f"   常用筛选：{filter_text}"
+            f"   常用筛选：{filter_text}\n"
+            f"   结果条数：{item.get('result_count', 0)}"
         )
     return "\n".join(lines)
 
