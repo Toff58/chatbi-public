@@ -191,9 +191,10 @@ SQLite 查询执行层。
 正式回归测试入口。
 
 职责：
-- 运行 `tests/test_cases.py` 中的 12 条高风险样例。
+- 运行 `tests/test_cases.py` 中的 50 条产品级回归样例。
 - 写入 latest 测试 CSV `logs/agent_test_results.csv` 和时间戳 CSV。
 - 记录总耗时、两次模型调用耗时、SQL 工具校验/执行耗时、结果数量和失败原因。
+- 覆盖正常 SQL 生成、字段枚举直答、数据时间边界、不可支持问题、安全拒绝、宏观人数口径和多维分组等高风险分支。
 
 ## 数据与日志
 
@@ -649,3 +650,23 @@ Conventional Commit summary:
 
 Conventional Commit summary:
 - `feat(agent): resolve contextual follow-up questions`
+
+### 2026-05-28 评测集扩展到 50 条
+
+需求识别：
+- 评测集需要从核心回归样例扩展到更接近产品验收的覆盖范围，避免 prompt、RAG、预检规则或工具校验改动后出现隐性回归。
+- 新增样例不能只覆盖成功 SQL，还要覆盖字段枚举直答、数据月份边界、不支持问题拒绝和危险请求拦截。
+
+改动结果：
+- `tests/test_cases.py` 从 15 条扩展到 50 条。
+- 新增样例覆盖字段/指标字典、城市等级/省份/收入/年龄/性别枚举、不可用月份、趋势问题、画像筛选 App 排行、默认口径映射、宏观人数估算、占比 rebase、多维分组、危险写操作、系统表查询、行为指标、留存、因果、跨 App 共同用户和不存在字段。
+- 50 条样例按风险分层：critical 16 条、high 19 条、medium 15 条。
+
+验证：
+- 执行 `python -m py_compile tests\test_cases.py tests\run_agent_tests.py` 通过。
+- 执行轻量统计验证：`TEST_CASES` 数量为 50，`test_id` 从 `T001` 到 `T050`，且没有重复 ID。
+- 抽跑不依赖模型的预检分支样例：`T016-T023`、`T044-T048` 通过。
+- 当前环境没有 `DEEPSEEK_API_KEY`，未运行需要模型 API 的完整 50 条 Agent 回归。
+
+Conventional Commit summary:
+- `test(agent): expand regression suite to 50 cases`

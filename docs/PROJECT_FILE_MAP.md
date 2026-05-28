@@ -84,11 +84,11 @@
 
 | 路径 | 作用 | 备注 |
 | --- | --- | --- |
-| `tests/test_cases.py` | 12 条正式回归样例 | 覆盖排行、画像筛选、宏观人数、安全 SQL、非法枚举和不存在字段。 |
+| `tests/test_cases.py` | 50 条正式回归样例 | 覆盖正常 SQL 生成、字段枚举直答、数据边界、安全拒绝、宏观人数、占比 rebase、不可支持问题和多维分组。 |
 | `tests/test_followup.py` | 追问补全轻量测试 | 不依赖模型 API，验证省份替换追问和独立问题不误补全。 |
 | `tests/run_agent_tests.py` | 回归测试入口 | 写入 latest CSV 和时间戳 CSV，包含模型、工具、SQL 执行等分段耗时。 |
 | `tests/run_generated_question_tests.py` | 批量生成问题测试脚本 | 当前为未跟踪文件；用于更大范围探索测试。 |
-| `logs/agent_test_results.csv` | 最新 12 条回归结果 | 本次最终结果为 12/12 通过。 |
+| `logs/agent_test_results.csv` | 最新回归结果 | 由 `tests/run_agent_tests.py` 生成；完整 50 条回归需要模型 API。 |
 | `logs/agent_test_results_20260519_183409.csv` | 本次最终时间戳测试日志 | 保留每条样例的分段耗时。 |
 | `logs/generated_questions_test_results*` | 历史批量问题测试结果 | 当前为未跟踪文件，本次未删除。 |
 

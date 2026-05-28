@@ -17,6 +17,7 @@ ChatBI 是一个基于 Streamlit、SQLite 和 LLM Agent 的自然语言问数应
 - Session Memory：按 `session_id` 记录最近问题、SQL、主题和筛选条件，用于公开 demo 的多轮上下文参考。
 - 会话恢复：同一 `session_id` 的页面历史会持久化，刷新或再次打开同一 URL 后可继续查看。
 - 日志观测：本地写入 CSV/JSONL 日志；配置 Supabase 后可同步写入云端日志表。
+- 回归评测：内置 50 条产品级评测样例，覆盖 SQL 生成、枚举直答、数据边界、安全拒绝和不可支持问题。
 
 ## 数据范围
 
@@ -101,6 +102,7 @@ ChatBI 是一个基于 Streamlit、SQLite 和 LLM Agent 的自然语言问数应
 │   ├── import_csv_to_db.py        # CSV 导入脚本
 │   └── sql_examples.json          # 问题-SQL few-shot 示例库
 ├── tests/
+│   ├── test_cases.py              # 50 条产品级回归评测样例
 │   └── run_agent_tests.py         # 需要模型 API 的回归测试
 └── docs/                          # 架构、产品和工程说明
 ```
@@ -183,7 +185,7 @@ SUPABASE_SERVICE_ROLE_KEY = "your-service-role-key"
 
 ## 后续方向
 
-- 补充更多业务问题-SQL 示例和回归评测集。
+- 将 50 条回归评测接入自动化质量看板，并继续扩充真实问法变体。
 - 接入更多数据表和表关系说明。
 - 增加 SQL 重试、澄清问题和权限控制。
 - 将 Streamlit 原型扩展为 API 服务与多用户部署形态。
